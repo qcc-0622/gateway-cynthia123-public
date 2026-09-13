@@ -36,8 +36,11 @@
    指针型 omitempty 只在 nil 时省略，**指向 0 的指针照样会序列化**。所以
    「字段缺失」= 站点没配过 → 用 new-api 的默认值（1.0 / 1.25）；
    「字段为 0」= 显式配了 0 → 用 0。绝不能写成 `x or default` 把 0 吞掉。
+3. **排查"某站拉不到价"时必须用网关自己的客户端（httpx），不要用 curl / urllib。**
+   2026-09-14 实测：relay-c 对 `python-urllib` 的 UA 回 Cloudflare `error code: 1010`，
+   对 httpx 的 UA 回 200 完整数据。用 curl 试会得出"这站不支持"的错误结论
+   （详见 _reject_reason 的三种情况表）。
 """
-
 import asyncio
 import logging
 import ssl
@@ -190,6 +193,34 @@ def _resolve_group(u: Upstream, group_ratio: dict) -> tuple[str, float, str]:
 
 # ── 抓取 ────────────────────────────────────────────────────────────────
 
+def _reject_reason(url: str, code: int, resp) -> str:
+    """把 401/403 翻译成"该站为什么拿不到价、还能不能拿到"。
+
+    2026-09-14 在本机真实上游上实测到的三种情况（都是只靠自己猜绝对猜不到的）：
+
+    | 现象 | 真实原因 | 能不能自动取价 |
+    |---|---|---|
+    | 403 + `error code: 1010` | **前置 Cloudflare 按 UA 指纹拦截**，与 new-api 无关 | 能——httpx 的 UA 能过，`urllib`/`curl` 的会被拦（**排查时务必用网关自己的客户端试**，别用 curl，否则会误判成站点不支持） |
+    | 403 + new-api 的 JSON 错误体 | 站点后台关了 pricing 模块（`HeaderNavModules.pricing.enabled=false`） | 不能，只能手填 |
+    | 401 | 站点把 pricing 模块设成了 `requireAuth=true`（`GET /api/status` 里能看到） | 不能（匿名拿不到后台凭据），只能手填 |
+
+    所以这里把响应体片段一起带上——让下一个人一眼看出是哪一种，而不是照着
+    "拉取失败"去重试一个永远不会成功的站点。"""
+    body = ""
+    try:
+        body = " ".join((resp.text or "").split())[:160]
+    except Exception:
+        pass
+    if code == 401:
+        return (f"{url} 返回 401：该站价格页要求登录（new-api 的 pricing 模块设了 "
+                f"requireAuth=true），网关是匿名调用拿不到，这一站只能继续手填价格")
+    if "error code: 1" in body or "cloudflare" in body.lower():
+        return (f"{url} 返回 403：被前置 Cloudflare 拦截（{body}），不是 new-api 关了"
+                f"价格页。httpx 自带 UA 通常能通过，改用 curl/urllib 复现会被拦")
+    return (f"{url} 返回 403：站点拒绝匿名访问（new-api 后台可能关闭了价格页模块）。"
+            f"响应片段：{body or '(空)'}")
+
+
 async def fetch_pricing(u: Upstream) -> tuple[str, dict]:
     """匿名拉取上游价格表，返回 (实际生效的 URL, 解析后的 JSON)。
 
@@ -206,14 +237,11 @@ async def fetch_pricing(u: Upstream) -> tuple[str, dict]:
             return url, resp.json()
         except httpx.HTTPStatusError as exc:
             code = exc.response.status_code
-            # 403 是唯一"换了 URL 也没用"的情况：上游把价格页模块关了。
-            # 其余状态码一律记下换下一个候选 URL 再试（反代对未知路径可能
-            # 回 502/500 而不是 404）。
-            if code == 403:
-                raise RuntimeError(
-                    f"{url} 返回 403：上游把价格页模块关掉了"
-                    "（new-api 后台 HeaderNavModuleAuth），本上游无法自动取价"
-                ) from exc
+            # 401/403 是"这一站换 URL 也没用"，必须当场给出精确定位——它们的原因
+            # 完全不同、处置也不同，糊成一句"拉取失败"会把人带偏（2026-09-14 实测
+            # 本机 5 个上游里两种都真实出现：ksir 401 / relay-c 403，见下）。
+            if code in (401, 403):
+                raise RuntimeError(_reject_reason(url, code, exc.response)) from exc
             last_exc = exc
             errors.append(f"{url} → HTTP {code}")
             continue

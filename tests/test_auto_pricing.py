@@ -53,9 +53,10 @@ import httpx  # noqa: E402
 # ── 测试基建 ────────────────────────────────────────────────────────────
 
 class _FakeResp:
-    def __init__(self, payload, status=200):
+    def __init__(self, payload, status=200, text=""):
         self._payload = payload
         self.status_code = status
+        self.text = text or (json.dumps(payload) if isinstance(payload, (dict, list)) else "")
 
     def raise_for_status(self):
         if self.status_code >= 400:
@@ -266,14 +267,51 @@ def test_fetch_pricing_falls_back_to_root_when_v1_404():
     assert payload["success"] is True
 
 
-def test_fetch_pricing_403_says_module_disabled():
+def test_fetch_pricing_401_says_require_auth():
+    """401 = 站点把 pricing 模块设成 requireAuth（需登录）。这是"永远拿不到"，
+    必须说清楚，别让人当成网络抖动反复重试。"""
     _install_fake_http({
-        "https://api.test/api/pricing": _FakeResp({}, status=403),
+        "https://api.test/api/pricing": _FakeResp(
+            {"code": "AUTH_UNAUTHORIZED", "message": "Unauthorized", "success": False},
+            status=401),
     })
     try:
         asyncio.run(price_sync.fetch_pricing(_make_upstream()))
     except RuntimeError as e:
-        assert "403" in str(e) and "价格页" in str(e), str(e)
+        msg = str(e)
+        assert "401" in msg and "requireAuth" in msg and "手填" in msg, msg
+        return
+    raise AssertionError("401 应当抛出可读的 RuntimeError")
+
+
+def test_fetch_pricing_403_cloudflare_is_not_blamed_on_newapi():
+    """403 且响应体是 Cloudflare 的 error code 1010 → 是前置 CF 按 UA 拦截，
+    跟 new-api 无关。2026-09-14 真实踩到：用 urllib 探测 relay-c 得到 1010，
+    换成网关自己的 httpx UA 就是 200。错误信息必须点出 Cloudflare。"""
+    _install_fake_http({
+        "https://api.test/api/pricing": _FakeResp({}, status=403, text="error code: 1010 "),
+    })
+    try:
+        asyncio.run(price_sync.fetch_pricing(_make_upstream()))
+    except RuntimeError as e:
+        msg = str(e)
+        assert "Cloudflare" in msg and "1010" in msg, msg
+        assert "不是 new-api 关了" in msg, msg
+        return
+    raise AssertionError("Cloudflare 403 应当抛出可读的 RuntimeError")
+
+
+def test_fetch_pricing_403_newapi_module_disabled():
+    """403 且响应体是 new-api 的错误体 → 站点后台关了价格页模块，只能手填。"""
+    _install_fake_http({
+        "https://api.test/api/pricing": _FakeResp(
+            {"success": False, "message": "该模块已关闭"}, status=403),
+    })
+    try:
+        asyncio.run(price_sync.fetch_pricing(_make_upstream()))
+    except RuntimeError as e:
+        msg = str(e)
+        assert "403" in msg and "价格页模块" in msg, msg
         return
     raise AssertionError("403 应当抛出可读的 RuntimeError")
 
