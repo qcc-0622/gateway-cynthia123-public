@@ -188,6 +188,16 @@ def get_price_entry(upstream: str, model: str) -> dict | None:
     return resolve_price(upstream, model)[0]
 
 
+def find_auto_entry(upstream: str, model: str) -> dict | None:
+    """只看**自动价目表**里能不能匹配到这个模型（不看优先级、不管手工价是否压着它）。
+
+    监控页用它把"上游拉回来的价"摊出来跟手工价对比。存在的意义：取价是
+    手工 > 自动，实际用到的模型多半已被手工价覆盖，页面上数字不会变——
+    这本身是对的（手工价往往更懂上游的按次促销变体），但不摊出来用户就
+    以为同步没生效，也看不出分组倍率配错导致的系统性偏差。"""
+    return _match_auto(load_auto_prices().get("prices") or [], upstream, model)
+
+
 def price_from_entry(entry: dict | None) -> dict:
     """条目 → 四个单价（$/1M tokens）。缺字段按默认价回落。"""
     if not entry:

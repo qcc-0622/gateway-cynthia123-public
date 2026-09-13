@@ -546,6 +546,16 @@ async def monitoring(request: Request):
         _entry, src = costs.resolve_price(upstream_name, model_name)
         return src, costs.SOURCE_LABEL.get(src, src)
 
+    def _auto_price_for(upstream_name: str, model_name: str) -> dict | None:
+        """该模型在上游自动价目表里的条目（不看优先级，纯粹"拉到了没有"）。
+
+        为什么监控页要单独把自动价摊出来（2026-09-14 用户反馈"拉了价但价格没更新"）：
+        实际用到的模型大多已经被手工价覆盖，而取价优先级是手工 > 自动，所以页面上
+        数字一个都不变——这本身是对的（手工价往往更懂上游的按次促销变体），但用户
+        看不到"拉回来的价长什么样、跟手工价差多少"，就会以为同步没生效。
+        摊出来后，分组倍率配错导致的系统性偏差（实测有差 5 倍的）也能一眼看出来。"""
+        return costs.find_auto_entry(upstream_name, model_name)
+
     # ── 用 day × model 数据精确算每日和总费用 ──
     # 旧实现是用单一 PRICE 算所有数据，多模型混用时不准
     day_model_rows = await get_cache_stats_by_day_and_model(days=days)
@@ -594,6 +604,29 @@ async def monitoring(request: Request):
             health = "weak"
         else:
             health = "poor"
+
+        # 上游自动价（如果有）：摊出来给用户看"拉回来的价长什么样"，以及跟当前
+        # 生效价差多少——分组倍率配错会让整站自动价系统性偏移，这里能一眼看出。
+        _auto_entry = _auto_price_for(upstream_name, display_name)
+        _auto_text, _auto_gap = "", ""
+        if _auto_entry:
+            _ap = costs.price_from_entry(_auto_entry)
+            if _auto_entry.get("price_type") == "per_call":
+                _auto_text = "$%g/次" % float(_auto_entry.get("price_per_call") or 0)
+            else:
+                _auto_text = "入 $%g / 出 $%g" % (_ap["input"], _ap["output"])
+            if price_source == costs.SOURCE_MANUAL:
+                _used_entry, _ = costs.resolve_price(upstream_name, display_name)
+                if _used_entry and (_used_entry.get("price_type") or "token") == "token" \
+                        and (_auto_entry.get("price_type") or "token") == "token":
+                    _up_in = float(_used_entry.get("input") or 0)
+                    if _ap["input"] > 0 and _up_in > 0:
+                        _r = _up_in / _ap["input"]
+                        if 0.9 <= _r <= 1.1:
+                            _auto_gap = "与手工价一致"
+                        else:
+                            _auto_gap = "手工价是它的 %.2f×" % _r
+
         models.append({
             "upstream": upstream_name,                                  # 中转站名
             "model": display_name,                                      # 客户端模型名
@@ -615,6 +648,10 @@ async def monitoring(request: Request):
             "price_source": price_source,
             "price_source_label": price_source_label,
             "has_price": price_source != costs.SOURCE_DEFAULT,
+            # 上游拉回来的自动价（None = 该站价格表里没这个模型名）。
+            # 手工价压着它时，模板会把两者一起显示出来，便于发现偏差。
+            "auto_price_text": _auto_text,
+            "auto_gap": _auto_gap,
         })
 
     # Token 分布面板的估算单价：取"token 量最大"的那个模型的实际生效价，

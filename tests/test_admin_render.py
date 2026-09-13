@@ -67,6 +67,11 @@ def _seed_auto_prices():
              "input": 3.0, "output": 15.0, "cache_write": 6.0, "cache_read": 0.3,
              "cache_write_5m": 3.75, "cache_write_1h": 6.0, "cache_ttl": "1h",
              "source": "new-api"},
+            # 这条会被手工价压住（见 _seed_settings）—— 用来验证"上游价 vs 手工价"
+            # 的偏差提示真的渲染出来（用户反馈"拉了价但价格没更新"的直接诉求）
+            {"upstream": "55", "model": "claude-haiku-4-5", "price_type": "token",
+             "input": 1.0, "output": 5.0, "cache_write": 1.25, "cache_read": 0.1,
+             "cache_ttl": "1h", "source": "new-api"},
             {"upstream": "relay-b", "model": "gemini-3-pro", "price_type": "per_call",
              "price_per_call": 0.02, "input": 0, "output": 0,
              "cache_write": 0, "cache_read": 0},
@@ -90,10 +95,17 @@ def _seed_settings():
     settings_module.update_settings(
         auto_price_enabled=True,
         auto_price_interval_hours=6,
-        model_prices=[{"upstream": "55", "model": "claude-opus-4-5",
-                       "price_type": "token", "price_per_call": 0,
-                       "input": 15.0, "output": 75.0,
-                       "cache_write": 30.0, "cache_read": 1.5}],
+        model_prices=[
+            {"upstream": "55", "model": "claude-opus-4-5",
+             "price_type": "token", "price_per_call": 0,
+             "input": 15.0, "output": 75.0,
+             "cache_write": 30.0, "cache_read": 1.5},
+            # 故意只有上游价的 0.2 倍 —— 模拟"分组倍率没配对"造成的系统性偏差
+            {"upstream": "55", "model": "claude-haiku-4-5",
+             "price_type": "token", "price_per_call": 0,
+             "input": 0.2, "output": 1.0,
+             "cache_write": 0.25, "cache_read": 0.02},
+        ],
     )
 
 
@@ -120,7 +132,8 @@ async def _seed_conversations():
             timestamp=(now - timedelta(minutes=i)).isoformat(timespec="seconds"),
         )
     for cid, model, ups in [("c9", "gemini-3-pro", "relay-b"),
-                            ("c10", "mystery-model", "55")]:
+                            ("c10", "mystery-model", "55"),
+                            ("c11", "claude-haiku-4-5", "55")]:
         await save_conversation(
             conversation_id=cid, role="assistant", content="hi",
             model=model, client_model=model, tokens_in=100, tokens_out=100,
@@ -180,6 +193,13 @@ def test_pages_render_with_auto_pricing_context():
     assert "自动" in body and "手工" in body
     assert "既没手工配价" in body and "快捷定价" in body
 
+    # 上游拉回来的自动价必须摊在模型行里（用户反馈"拉了价但价格没更新"的诉求）：
+    # ① 自动价就是生效价的那行 —— 直接显示上游价
+    assert "上游价 入 $3 / 出 $15" in body
+    # ② 自动价被手工价压住的那行 —— 连偏差倍数一起显示，否则看不出分组倍率配错
+    assert "上游价 入 $1 / 出 $5" in body
+    assert "手工价是它的 0.20×" in body
+
     # 自动同步状态面板：成功、失败沿用旧价、分组回退警告三种都要显示
     assert "上游价格自动同步" in body
     assert "不在上游分组表里" in body          # 引号被 Jinja 转义，只匹配无引号部分
@@ -199,7 +219,7 @@ def test_refresh_all_prices_endpoint_keeps_old_snapshot():
     否则一次上游抖动就让全站费用掉回 Opus 默认价。"""
     _prepare()
     before = json.loads(Path(costs.AUTO_PRICES_FILE).read_text(encoding="utf-8"))
-    assert len(before["prices"]) == 2
+    assert len(before["prices"]) == 3     # 55 两条 + relay-b 一条（见 _seed_auto_prices）
 
     with _client() as client:
         r = client.post("/admin/upstreams/refresh-all-prices")
@@ -208,7 +228,7 @@ def test_refresh_all_prices_endpoint_keeps_old_snapshot():
     data = r.json()
     assert set(data) == {"55", "relay-b"}
     assert data["55"]["ok"] is False and data["55"]["stale"] is True
-    assert data["55"]["count"] == 1            # 沿用了旧价
+    assert data["55"]["count"] == 2            # 沿用了旧价（两条）
     assert data["55"]["error"]
 
     after = json.loads(Path(costs.AUTO_PRICES_FILE).read_text(encoding="utf-8"))

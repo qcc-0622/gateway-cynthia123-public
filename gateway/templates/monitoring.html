@@ -159,6 +159,16 @@
         {% if m.model_differs %}
         <div style="font-size:10px;color:var(--text-3);margin-top:2px;white-space:nowrap">→ {{ m.upstream_model }}</div>
         {% endif %}
+        {# 上游拉回来的自动价：摊出来，否则"点了同步但数字没变"看起来像没生效 #}
+        {% if m.auto_price_text %}
+        <div style="font-size:10px;margin-top:2px;white-space:nowrap"
+             title="上游 /api/pricing 拉回来的价{% if m.auto_gap %}；当前生效价与它的关系：{{ m.auto_gap }}{% endif %}">
+          <span style="color:var(--text-3)">上游价 {{ m.auto_price_text }}</span>
+          {% if m.auto_gap %}
+          <span style="color:{% if '一致' in m.auto_gap %}var(--text-3){% else %}#d4a03a{% endif %}">· {{ m.auto_gap }}</span>
+          {% endif %}
+        </div>
+        {% endif %}
       </td>
       <td style="white-space:nowrap">{{ m.messages }}</td>
       <td style="white-space:nowrap;color:var(--text-2)">{{ "{:,}".format(m.input) }}</td>
