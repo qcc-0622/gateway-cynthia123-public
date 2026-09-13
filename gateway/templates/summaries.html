@@ -1,0 +1,337 @@
+{% extends "base.html" %}
+{% block title %}BP2 摘要{% endblock %}
+{% block page_title %}BP2 对话摘要{% endblock %}
+{% block page_sub %}网关自动生成的上下文压缩摘要{% endblock %}
+
+{% block content %}
+
+{% if request.query_params.get('edited') %}
+<div class="alert alert-success" style="margin-bottom:14px">✅ 摘要已保存</div>
+{% endif %}
+{% if request.query_params.get('synced') %}
+<div class="alert alert-success" style="margin-bottom:14px">
+  ⚡ 已标记 <code>{{ request.query_params.get('synced') }}</code> 需要提前同步摘要。<strong>下一轮对话请求</strong>进来时将同步压缩（需等 BP2 生成成功）。
+</div>
+{% endif %}
+{% if request.query_params.get('err') == 'empty' %}
+<div class="alert alert-error" style="margin-bottom:14px">⚠️ 摘要内容不能为空</div>
+{% endif %}
+
+{% if grouped_summaries %}
+<p style="font-size:13px;color:var(--text-3);margin-bottom:16px">
+  共 {{ summaries|length }} 条摘要 · {{ grouped_summaries|length }} 个 Session。点击「编辑」可以分层修改内容。
+</p>
+
+{% for grp in grouped_summaries %}
+<details class="card" style="margin-bottom:10px" id="grp-{{ grp.fingerprint }}">
+  <summary style="list-style:none;cursor:pointer;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;padding:2px 0;user-select:none">
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <span style="font-size:18px">{% if grp.fingerprint == 'fp_global' %}🌐{% else %}📁{% endif %}</span>
+      <code style="font-size:13px;font-weight:600">{{ grp.fingerprint }}</code>
+      {% if grp.fingerprint == 'fp_global' %}
+      <span style="display:inline-block;padding:1px 8px;border-radius:10px;background:var(--accent);color:white;font-size:11px;font-weight:600">全局（统一大脑）</span>
+      {% endif %}
+      <span class="tag tag-anthropic">{{ grp.count }} 个 cycle</span>
+      <span style="font-size:12px;color:var(--text-3)">{{ grp.total_chars }} 字</span>
+    </div>
+    <span style="font-size:12px;color:var(--text-3);white-space:nowrap">最新 {{ grp.latest_local }}</span>
+    {% if grp.first_user_preview or grp.last_user_preview %}
+    <div style="width:100%;font-size:11px;color:var(--text-3);margin-top:4px;display:flex;gap:10px;flex-wrap:wrap">
+      {% if grp.first_user_preview %}<span>📝 始：<i>{{ grp.first_user_preview }}</i></span>{% endif %}
+      {% if grp.last_user_preview %}<span>· 末：<i>{{ grp.last_user_preview }}</i></span>{% endif %}
+    </div>
+    {% endif %}
+  </summary>
+
+  <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border)">
+  <div style="display:flex;justify-content:flex-end;gap:8px;margin-bottom:10px">
+    <form method="post" action="{{ admin_base }}/summaries/{{ grp.fingerprint }}/sync"
+          onsubmit="return confirm('提前同步这段对话的摘要？\n\n将在下一轮请求进来时同步调用上游（大约延迟 5-30秒）。')"
+          style="display:inline">
+      <button type="submit" class="btn btn-sm" style="background:var(--accent-2,#7c3aed);color:white">
+        ⚡ 提前同步摘要
+      </button>
+    </form>
+  </div>
+  {% for s in grp.summaries %}
+  <div style="margin-bottom:12px;padding:12px 14px;background:var(--bg-3);border-radius:var(--radius)" id="card-{{ s.conv_fingerprint }}-{{ s.freeze_cycle }}">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px;margin-bottom:10px">
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <span class="tag tag-anthropic">覆盖 {{ s.messages_covered or '?' }} 条</span>
+        <button type="button" class="btn btn-ghost btn-sm" style="font-size:11px;padding:2px 8px;margin-left:4px"
+                onclick="toggleBoundary('{{ s.conv_fingerprint }}', {{ s.messages_covered or 0 }})">🔍 查看边界</button>
+        {% if s.freeze_cycle %}<span style="font-size:11px;color:var(--text-3)">cycle #{{ s.freeze_cycle }}</span>{% endif %}
+        {% if s.round_start and s.round_end %}<span style="font-size:11px;color:var(--text-3)">第 {{ s.round_start }}–{{ s.round_end }} 轮</span>{% endif %}
+        <span style="font-size:11px;color:var(--text-3)">{{ s.summary|length }} 字</span>
+        <span style="font-size:11px;color:var(--text-3)">{{ s.created_at_local }}</span>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <button type="button" class="btn btn-ghost btn-sm"
+                onclick="toggleEdit('{{ s.conv_fingerprint }}', {{ s.freeze_cycle }})">编辑</button>
+        <form method="post" action="{{ admin_base }}/summaries/{{ s.conv_fingerprint }}/{{ s.freeze_cycle }}/delete"
+              onsubmit="return confirm('删除这条摘要？下次聊天时会重新生成。')"
+              style="display:inline">
+          <button type="submit" class="btn btn-danger btn-sm">删除</button>
+        </form>
+      </div>
+    </div>
+    <textarea id="raw-{{ s.conv_fingerprint }}-{{ s.freeze_cycle }}" style="display:none">{{ s.summary }}</textarea>
+    <div id="boundary-{{ s.conv_fingerprint }}-{{ s.freeze_cycle }}" class="boundary-info" style="display:none;margin-bottom:12px;padding:10px;background:var(--bg-2);border-left:3px solid var(--accent-2);border-radius:4px;font-size:12px"></div>
+    <div id="view-{{ s.conv_fingerprint }}-{{ s.freeze_cycle }}"></div>
+    <form id="edit-{{ s.conv_fingerprint }}-{{ s.freeze_cycle }}" style="display:none"
+          method="post"
+          action="{{ admin_base }}/summaries/{{ s.conv_fingerprint }}/{{ s.freeze_cycle }}/edit"
+          onsubmit="mergeBeforeSubmit('{{ s.conv_fingerprint }}', {{ s.freeze_cycle }})">
+      <input type="hidden" name="summary" id="merged-{{ s.conv_fingerprint }}-{{ s.freeze_cycle }}">
+      <div id="edit-panels-{{ s.conv_fingerprint }}-{{ s.freeze_cycle }}"></div>
+      <div style="margin-top:12px;display:flex;gap:8px;align-items:center">
+        <button type="submit" class="btn btn-primary btn-sm">保存</button>
+        <button type="button" class="btn btn-ghost btn-sm"
+                onclick="toggleEdit('{{ s.conv_fingerprint }}', {{ s.freeze_cycle }})">取消</button>
+        <span style="font-size:11px;color:var(--text-3)">保留四层标题，rolling 才能正确叠加</span>
+      </div>
+    </form>
+  </div>
+  {% endfor %}
+  </div>
+</details>
+{% endfor %}
+
+{% else %}
+<div class="card" style="text-align:center;padding:60px;color:var(--text-3)">
+  <div style="font-size:32px;margin-bottom:12px">📝</div>
+  <div style="font-size:14px">暂无 BP2 摘要</div>
+  <div style="font-size:12px;margin-top:8px">需要聊满两个 cycle_size 周期后才会自动生成第一条</div>
+</div>
+{% endif %}
+
+<script>
+const SECTIONS = [
+  {
+    key: '锚定',
+    header: '# 锚定',
+    desc: '永远保留，只增不减',
+    color: '#b45309',
+    bg: 'rgba(251,191,36,0.07)',
+    border: 'rgba(251,191,36,0.35)',
+    rows: 5,
+  },
+  {
+    key: '近期',
+    header: '# 近期',
+    desc: '最近 7 天',
+    color: '#0369a1',
+    bg: 'rgba(56,189,248,0.07)',
+    border: 'rgba(56,189,248,0.35)',
+    rows: 8,
+  },
+  {
+    key: '远期',
+    header: '# 远期',
+    desc: '7–30 天前',
+    color: '#6d28d9',
+    bg: 'rgba(167,139,250,0.07)',
+    border: 'rgba(167,139,250,0.35)',
+    rows: 6,
+  },
+  {
+    key: '古老',
+    header: '# 古老',
+    desc: '30 天以上',
+    color: 'var(--text-3)',
+    bg: 'var(--bg)',
+    border: 'var(--border)',
+    rows: 4,
+  },
+];
+
+function escHtml(s) {
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+function parseSections(text) {
+  const re = /^#\s*(锚定|近期|远期|古老)[^\n]*/gm;
+  const matches = [...text.matchAll(re)];
+  if (matches.length === 0) return null;
+  const result = {};
+  for (let i = 0; i < matches.length; i++) {
+    const key = matches[i][1];
+    const after = matches[i].index + matches[i][0].length;
+    const next = i + 1 < matches.length ? matches[i + 1].index : text.length;
+    result[key] = text.slice(after, next).trim();
+  }
+  return result;
+}
+
+function buildViewPanels(fp, cycle) {
+  const rawEl = document.getElementById('raw-' + fp + '-' + cycle);
+  if (!rawEl) return;
+  const raw = rawEl.value;
+  const container = document.getElementById('view-' + fp + '-' + cycle);
+  const sections = parseSections(raw);
+
+  if (!sections) {
+    // 非分层结构，降级显示为单个折叠块
+    container.innerHTML =
+      '<details style="background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm)">' +
+        '<summary style="cursor:pointer;padding:10px 14px;font-size:12px;color:var(--text-3);list-style:none;display:flex;justify-content:space-between;align-items:center;user-select:none">' +
+          '<span style="font-weight:600">展开摘要内容</span>' +
+          '<span style="font-size:11px">' + escHtml(raw.slice(0, 80)) + (raw.length > 80 ? '…' : '') + '</span>' +
+        '</summary>' +
+        '<div style="padding:12px 14px;border-top:1px solid var(--border);font-size:13px;line-height:1.75;white-space:pre-wrap;word-break:break-word;max-height:60vh;overflow-y:auto">' +
+          escHtml(raw) +
+        '</div>' +
+      '</details>';
+    return;
+  }
+
+  let html = '<div style="display:flex;flex-direction:column;gap:6px">';
+  for (const sec of SECTIONS) {
+    const content = sections[sec.key] || '';
+    const isEmpty = !content;
+    const chars = isEmpty ? '' : content.length + ' 字';
+    html +=
+      '<details style="background:' + sec.bg + ';border:1px solid ' + sec.border + ';border-radius:var(--radius-sm)">' +
+        '<summary style="cursor:pointer;padding:8px 12px;list-style:none;display:flex;align-items:center;gap:8px;user-select:none">' +
+          '<span style="font-weight:700;font-size:12px;color:' + sec.color + '">' + sec.header + '</span>' +
+          '<span style="font-size:11px;color:var(--text-3)">' + sec.desc + '</span>' +
+          '<span style="font-size:11px;color:var(--text-3);margin-left:auto;opacity:' + (isEmpty ? '0.4' : '1') + '">' +
+            (isEmpty ? '暂无' : chars) +
+          '</span>' +
+        '</summary>' +
+        '<div style="padding:10px 14px;border-top:1px solid ' + sec.border + ';font-size:13px;line-height:1.75;white-space:pre-wrap;word-break:break-word;max-height:50vh;overflow-y:auto;color:var(--text)">' +
+          (isEmpty ? '<span style="color:var(--text-3);font-style:italic">（暂无内容）</span>' : escHtml(content)) +
+        '</div>' +
+      '</details>';
+  }
+  html += '</div>';
+  container.innerHTML = html;
+}
+
+function buildEditPanels(fp, cycle) {
+  const rawEl = document.getElementById('raw-' + fp + '-' + cycle);
+  if (!rawEl) return;
+  const raw = rawEl.value;
+  const container = document.getElementById('edit-panels-' + fp + '-' + cycle);
+  const sections = parseSections(raw) || {};
+
+  let html = '<div style="display:flex;flex-direction:column;gap:14px">';
+  for (const sec of SECTIONS) {
+    const content = sections[sec.key] || '';
+    html +=
+      '<div>' +
+        '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">' +
+          '<span style="font-weight:700;font-size:12px;color:' + sec.color + '">' + sec.header + '</span>' +
+          '<span style="font-size:11px;color:var(--text-3)">' + sec.desc + '</span>' +
+        '</div>' +
+        '<textarea id="sec-' + sec.key + '-' + fp + '-' + cycle + '" rows="' + sec.rows + '" ' +
+          'style="width:100%;font-family:inherit;font-size:13px;line-height:1.75;' +
+                 'background:' + sec.bg + ';border:1px solid ' + sec.border + ';' +
+                 'border-radius:var(--radius-sm);padding:10px 12px;' +
+                 'color:var(--text);box-sizing:border-box;resize:vertical">' +
+          escHtml(content) +
+        '</textarea>' +
+      '</div>';
+  }
+  html += '</div>';
+  container.innerHTML = html;
+}
+
+function mergeBeforeSubmit(fp, cycle) {
+  const parts = [];
+  for (const sec of SECTIONS) {
+    const ta = document.getElementById('sec-' + sec.key + '-' + fp + '-' + cycle);
+    const val = ta ? ta.value.trim() : '';
+    parts.push(sec.header + '\n' + (val || '暂无'));
+  }
+  document.getElementById('merged-' + fp + '-' + cycle).value = parts.join('\n\n');
+}
+
+function toggleEdit(fp, cycle) {
+  const view = document.getElementById('view-' + fp + '-' + cycle);
+  const edit = document.getElementById('edit-' + fp + '-' + cycle);
+  if (edit.style.display === 'none') {
+    view.style.display = 'none';
+    edit.style.display = 'block';
+    buildEditPanels(fp, cycle);
+    const first = document.getElementById('sec-锚定-' + fp + '-' + cycle);
+    if (first) first.focus();
+  } else {
+    view.style.display = 'block';
+    edit.style.display = 'none';
+  }
+}
+
+// 页面加载时渲染所有查看面板
+document.addEventListener('DOMContentLoaded', function () {
+  document.querySelectorAll('[id^="raw-"]').forEach(function (el) {
+    const m = el.id.match(/^raw-(.+)-(\d+)$/);
+    if (m) buildViewPanels(m[1], m[2]);
+  });
+});
+
+
+// BP2 边界查询
+let boundaryCache = {};
+
+async function toggleBoundary(fp, covered) {
+  const id = `boundary-${fp}-${covered}`;
+  const container = document.querySelector(`[id^="boundary-${fp}-"]`);
+  if (!container) return;
+  
+  if (container.style.display === 'block') {
+    container.style.display = 'none';
+    return;
+  }
+  
+  const cacheKey = `${fp}-${covered}`;
+  if (boundaryCache[cacheKey]) {
+    container.innerHTML = boundaryCache[cacheKey];
+    container.style.display = 'block';
+    return;
+  }
+  
+  container.innerHTML = '<p style="color:var(--text-3)">⏳ 加载中...</p>';
+  container.style.display = 'block';
+  
+  try {
+    const res = await fetch(`{{ admin_base }}/api/bp2-boundary?fingerprint=${fp}&covered=${covered}`);
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    
+    let html = '<div style="line-height:1.8">';
+    
+    if (data.covered_last) {
+      html += `<p><strong>🏁 最后一条覆盖：</strong><br>`;
+      html += `<span style="color:var(--text-3);font-size:11px">第 ${covered} 条 · ${data.covered_last.timestamp} · ${data.covered_last.role}</span><br>`;
+      html += `<span style="font-size:11px">${escapeHtml(data.covered_last.preview)}</span></p>`;
+    }
+    
+    if (data.next_uncovered) {
+      html += `<p><strong>➡️ 下一条未覆盖：</strong><br>`;
+      html += `<span style="color:var(--text-3);font-size:11px">第 ${covered+1} 条 · ${data.next_uncovered.timestamp} · ${data.next_uncovered.role}</span><br>`;
+      html += `<span style="font-size:11px">${escapeHtml(data.next_uncovered.preview)}</span></p>`;
+    } else if (data.covered_last) {
+      html += `<p style="color:#10b981;font-weight:500;margin-top:8px">✅ 已覆盖到当前 fingerprint 的最后一条消息</p>`;
+      html += `<p style="color:var(--text-3);font-size:11px;margin-top:4px">（最后一条即上方显示的第 ${covered} 条）</p>`;
+    }
+    
+    html += '</div>';
+    boundaryCache[cacheKey] = html;
+    container.innerHTML = html;
+  } catch (e) {
+    container.innerHTML = `<p style="color:var(--danger)">❌ 加载失败：${e.message}</p>`;
+  }
+}
+
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+</script>
+{% endblock %}

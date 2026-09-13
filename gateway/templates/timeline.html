@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}全局时间线{% endblock %}
+{% block page_title %}全局时间线{% endblock %}
+{% block page_sub %}统一大脑：所有平台的对话按到达顺序混排{% endblock %}
+
+{% block content %}
+<div style="margin-bottom:16px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+  <a href="{{ admin_base }}/logs" class="btn btn-ghost btn-sm">← 对话记录</a>
+  {% for n in [100, 200, 500] %}
+  <a href="{{ admin_base }}/timeline?limit={{ n }}"
+     class="btn btn-ghost btn-sm"
+     {% if limit == n %}style="border-color:var(--accent);color:var(--accent-light)"{% endif %}>最近 {{ n }} 条</a>
+  {% endfor %}
+</div>
+
+<div style="font-size:12px;color:var(--text-3);margin-bottom:16px;display:flex;gap:14px;flex-wrap:wrap">
+  <span>统一大脑：
+    {% if unified_enabled %}<strong style="color:var(--accent-light)">已开启</strong>
+    {% else %}<strong>未开启</strong>（本页只是查询视图，不影响任何行为）{% endif %}
+  </span>
+  <span>全局摘要已覆盖到序号：<strong style="color:var(--text)">{{ summary_pos }}</strong>（0 = 还没有全局摘要）</span>
+</div>
+
+{% if items %}
+{% for msg in items %}
+<div class="msg msg-{{ msg.role }}">
+  <div class="msg-header">
+    <span class="msg-role">
+      {% if msg.role == "user" %}👤 用户
+      {% elif msg.role == "assistant" %}🤖 助手
+      {% else %}⚙️ 系统{% endif %}
+      <span style="display:inline-block;margin-left:6px;padding:1px 8px;border-radius:10px;
+                   background:var(--bg-3);font-size:11px;color:var(--accent-light)">{{ msg.label }}</span>
+      {% if msg.tag %}
+      <span style="display:inline-block;margin-left:4px;padding:1px 8px;border-radius:10px;
+                   background:var(--bg-3);font-size:11px;color:var(--text-3)">{{ msg.tag }}</span>
+      {% endif %}
+    </span>
+    <span class="msg-meta">
+      #{{ msg.id }}
+      {% if msg.timestamp %}· {{ msg.timestamp }}{% endif %}
+      {% if msg.id <= summary_pos %}· <span title="这条已被压进全局摘要">📦 已入摘要</span>{% endif %}
+    </span>
+  </div>
+  <pre class="content">{{ msg.content[:2000] }}{% if msg.content|length > 2000 %}
+…（已截断，共 {{ msg.content|length }} 字符）{% endif %}</pre>
+</div>
+{% endfor %}
+{% else %}
+<div style="text-align:center;padding:48px;color:var(--text-3)">
+  <div style="font-size:32px;margin-bottom:10px">🕰️</div>
+  <div>时间线暂无内容</div>
+</div>
+{% endif %}
+{% endblock %}

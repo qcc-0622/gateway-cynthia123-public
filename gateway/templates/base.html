@@ -1,0 +1,567 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1, viewport-fit=cover">
+<title>{% block title %}聊天网关{% endblock %} — Chat Gateway</title>
+<link rel="stylesheet" href="/chat-gateway/static/style.css?v=36">
+<link rel="manifest" href="/chat-gateway/static/manifest.json?v=31">
+<link rel="preconnect" href="https://fonts.font.im">
+<link href="https://fonts.font.im/css2?family=Playfair+Display:wght@400;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+<meta name="theme-color" content="#6E4F9A">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Chat Gateway">
+<link rel="apple-touch-icon" href="/chat-gateway/static/apple-touch-icon.png?v=31">
+</head>
+<body>
+<div class="layout">
+
+  <!-- 侧边栏遮罩（手机端） -->
+  <div class="sidebar-overlay" id="overlay" onclick="closeSidebar()"></div>
+
+  <!-- 侧边栏 -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-logo">
+      <div class="logo-icon">🔀</div>
+      <div>
+        <div class="logo-text">Chat Gateway</div>
+        <div class="logo-sub">管理后台</div>
+      </div>
+    </div>
+    <nav class="sidebar-nav">
+
+      <div class="nav-group">
+        <div class="nav-group-title">读 · OBSERVE</div>
+        <a href="{{ admin_base }}/" class="nav-item {% if request.url.path.rstrip('/').endswith('/admin') %}active{% endif %}">
+          <span class="nav-icon">📊</span> 仪表盘
+        </a>
+        <a href="{{ admin_base }}/monitoring" class="nav-item {% if 'monitoring' in request.url.path %}active{% endif %}">
+          <span class="nav-icon">💰</span> 缓存监控
+        </a>
+        <a href="{{ admin_base }}/system-logs" class="nav-item {% if 'system-logs' in request.url.path %}active{% endif %}">
+          <span class="nav-icon">🖥️</span> 系统日志
+        </a>
+      </div>
+
+      <div class="nav-group">
+        <div class="nav-group-title">查 · DATA</div>
+        <a href="{{ admin_base }}/logs" class="nav-item {% if '/logs' in request.url.path and 'system' not in request.url.path %}active{% endif %}">
+          <span class="nav-icon">📋</span> 对话记录
+        </a>
+        <a href="{{ admin_base }}/summaries" class="nav-item {% if 'summaries' in request.url.path %}active{% endif %}">
+          <span class="nav-icon">📝</span> BP2 摘要
+        </a>
+      </div>
+
+      <div class="nav-group">
+        <div class="nav-group-title">写 · CONFIG</div>
+        <a href="{{ admin_base }}/upstreams" class="nav-item {% if '/upstreams' in request.url.path %}active{% endif %}">
+          <span class="nav-icon">⚙️</span> 上游管理
+        </a>
+        <a href="{{ admin_base }}/gateway-settings" class="nav-item {% if 'gateway-settings' in request.url.path %}active{% endif %}">
+          <span class="nav-icon">🔧</span> 网关设置
+        </a>
+      </div>
+
+      <div class="nav-group">
+        <a href="{{ admin_base }}/doc" class="nav-item {% if '/doc' in request.url.path %}active{% endif %}">
+          <span class="nav-icon">📖</span> 维护文档
+        </a>
+      </div>
+
+    </nav>
+    <div class="sidebar-footer">
+      <a href="{{ admin_base }}/logout" class="nav-item">
+        <span class="nav-icon">🚪</span> 退出登录
+      </a>
+    </div>
+  </aside>
+
+  <!-- 主内容区 -->
+  <div class="main">
+    <header class="topbar">
+      <button class="menu-btn" onclick="openSidebar()">☰</button>
+      <div>
+        <div class="topbar-title">{% block page_title %}{% endblock %}</div>
+        <div class="topbar-sub">{% block page_sub %}gateway.example.com/chat-gateway{% endblock %}</div>
+      </div>
+      <div class="topbar-tools">
+        <!-- 通知铃铛 -->
+        <div class="notif-wrap" id="notif-wrap">
+          <button class="theme-toggle" id="notif-btn" onclick="toggleNotifPanel()" aria-label="通知">
+            🔔
+            <span class="notif-badge" id="notif-badge" style="display:none">0</span>
+          </button>
+          <div class="notif-panel" id="notif-panel">
+            <div class="notif-header">
+              <span>通知</span>
+              <div style="display:flex;gap:6px;align-items:center">
+                <button id="push-subscribe-btn" onclick="togglePushSubscription()">🔔 开启推送</button>
+                <button onclick="markAllRead()" style="background:none;border:none;font-size:11px;color:var(--accent);cursor:pointer">已读</button>
+              </div>
+            </div>
+            <div class="notif-list" id="notif-list">
+              <div class="notif-empty">加载中…</div>
+            </div>
+          </div>
+        </div>
+        <button class="theme-toggle" id="dark-toggle" aria-label="切换暗色">🌙</button>
+        <div class="theme-picker-wrap">
+          <button class="theme-toggle" id="theme-gear" aria-label="主题色">🎨</button>
+          <div class="theme-picker" id="theme-picker">
+            <button class="theme-dot" data-color="purple" title="紫" style="background:#6E4F9A"></button>
+            <button class="theme-dot" data-color="ink" title="墨蓝" style="background:#4A6FA5"></button>
+            <button class="theme-dot" data-color="warm" title="暖棕" style="background:#A67C52"></button>
+            <button class="theme-dot" data-color="cool" title="冷灰" style="background:#6B7280"></button>
+            <button class="theme-dot" data-color="rose" title="玫瑰" style="background:#C57B8A"></button>
+            <button class="theme-dot" data-color="forest" title="森绿" style="background:#558B6E"></button>
+            <button class="theme-dot" data-color="sunset" title="日落" style="background:#D4863A"></button>
+            <label class="theme-dot theme-dot-custom" title="自定义">
+              <span>🖌</span>
+              <input type="color" id="custom-color-input" style="position:absolute;opacity:0;width:100%;height:100%;cursor:pointer">
+            </label>
+          </div>
+        </div>
+      </div>
+    </header>
+    <div class="page-body">
+      {% block content %}{% endblock %}
+    </div>
+  </div>
+
+</div>
+
+<!-- 底部 tab bar（手机专用，桌面 CSS 隐藏） -->
+<nav class="bottom-nav" id="bottom-nav">
+  <a href="{{ admin_base }}/" class="bottom-nav-item {% if request.url.path.rstrip('/').endswith('/admin') or 'monitoring' in request.url.path or 'system-logs' in request.url.path %}active{% endif %}">
+    <span class="bn-icon">📊</span>
+    <span class="bn-label">读</span>
+  </a>
+  <a href="{{ admin_base }}/logs" class="bottom-nav-item {% if '/logs' in request.url.path or 'summaries' in request.url.path %}active{% endif %}">
+    <span class="bn-icon">📋</span>
+    <span class="bn-label">查</span>
+  </a>
+  <a href="{{ admin_base }}/upstreams" class="bottom-nav-item {% if '/upstreams' in request.url.path or 'gateway-settings' in request.url.path %}active{% endif %}">
+    <span class="bn-icon">⚙️</span>
+    <span class="bn-label">写</span>
+  </a>
+  <button class="bottom-nav-item" onclick="openSidebar()">
+    <span class="bn-icon">☰</span>
+    <span class="bn-label">更多</span>
+  </button>
+</nav>
+
+<!-- 回顶 FAB -->
+<button class="fab" id="fab-top" onclick="window.scrollTo({top:0,behavior:'smooth'})" aria-label="回到顶部">↑</button>
+
+<script>
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/chat-gateway/static/sw.js', {scope: '/chat-gateway/'})
+    .catch(e => console.warn('SW register failed:', e));
+}
+</script>
+<script>
+function openSidebar() {
+  document.getElementById('sidebar').classList.add('open');
+  document.getElementById('overlay').classList.add('show');
+}
+function closeSidebar() {
+  document.getElementById('sidebar').classList.remove('open');
+  document.getElementById('overlay').classList.remove('show');
+}
+
+// 回顶 FAB：滚动 > 300px 显示
+(function () {
+  var fab = document.getElementById('fab-top');
+  window.addEventListener('scroll', function() {
+    fab.classList.toggle('show', window.scrollY > 300);
+  }, {passive: true});
+})();
+
+// 自动给所有"裸表格"加横向滚动容器，防止移动端被挤压
+(function () {
+  function wrapTables() {
+    document.querySelectorAll('table').forEach(function(t) {
+      var parent = t.parentElement;
+      if (!parent) return;
+      var cs = getComputedStyle(parent);
+      if (cs.overflowX === 'auto' || cs.overflowX === 'scroll') return;
+      if (parent.classList.contains('table-wrap')) return;
+      var wrap = document.createElement('div');
+      wrap.className = 'table-wrap';
+      parent.insertBefore(wrap, t);
+      wrap.appendChild(t);
+    });
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', wrapTables);
+  } else {
+    wrapTables();
+  }
+})();
+
+// 触屏手势：从左边缘右滑打开侧边栏；侧边栏内左滑关闭
+(function () {
+  var startX = 0, startY = 0, startT = 0, tracking = false;
+  document.addEventListener('touchstart', function(e) {
+    var t = e.touches[0];
+    startX = t.clientX; startY = t.clientY; startT = Date.now();
+    tracking = true;
+  }, {passive: true});
+  document.addEventListener('touchend', function(e) {
+    if (!tracking) return;
+    tracking = false;
+    var t = e.changedTouches[0];
+    var dx = t.clientX - startX, dy = t.clientY - startY;
+    var dt = Date.now() - startT;
+    if (dt > 400 || Math.abs(dy) > 60) return;
+    var sidebar = document.getElementById('sidebar');
+    var isOpen = sidebar.classList.contains('open');
+    if (!isOpen && startX < 20 && dx > 60) openSidebar();
+    if (isOpen && dx < -50) closeSidebar();
+  }, {passive: true});
+})();
+</script>
+
+<script>
+/* ===== Theme switcher ===== */
+(function() {
+  var root = document.documentElement;
+  var savedMode = localStorage.getItem('gw-theme-mode') || 'light';
+  var savedColor = localStorage.getItem('gw-theme-color') || 'purple';
+  var savedCustom = localStorage.getItem('gw-theme-custom') || '';
+
+  function applyMode(mode) {
+    if (mode === 'dark') root.setAttribute('data-theme', 'dark');
+    else root.removeAttribute('data-theme');
+    var btn = document.getElementById('dark-toggle');
+    if (btn) btn.textContent = (mode === 'dark') ? '☀' : '🌙';
+  }
+  function applyColor(color, customHex) {
+    if (color === 'custom' && customHex) {
+      root.setAttribute('data-accent', 'custom');
+      root.style.setProperty('--accent', customHex);
+      // lighten 函数粗略生成 accent-light
+      root.style.setProperty('--accent-light', customHex);
+      root.style.setProperty('--accent-dim', customHex + '22');
+    } else {
+      root.style.removeProperty('--accent');
+      root.style.removeProperty('--accent-light');
+      root.style.removeProperty('--accent-dim');
+      root.setAttribute('data-accent', color);
+    }
+  }
+
+  applyMode(savedMode);
+  applyColor(savedColor, savedCustom);
+
+  document.addEventListener('DOMContentLoaded', function() {
+    var darkBtn = document.getElementById('dark-toggle');
+    if (darkBtn) {
+      darkBtn.addEventListener('click', function() {
+        var cur = root.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+        localStorage.setItem('gw-theme-mode', cur);
+        applyMode(cur);
+      });
+      applyMode(savedMode);  // re-apply to update button text
+    }
+
+    var gear = document.getElementById('theme-gear');
+    var picker = document.getElementById('theme-picker');
+    if (gear && picker) {
+      gear.addEventListener('click', function(e) {
+        e.stopPropagation();
+        picker.classList.toggle('show');
+      });
+      document.addEventListener('click', function() { picker.classList.remove('show'); });
+      picker.addEventListener('click', function(e) { e.stopPropagation(); });
+    }
+
+    document.querySelectorAll('.theme-dot[data-color]').forEach(function(dot) {
+      dot.addEventListener('click', function() {
+        var c = dot.dataset.color;
+        localStorage.setItem('gw-theme-color', c);
+        applyColor(c, null);
+        picker.classList.remove('show');
+      });
+    });
+
+    var customInput = document.getElementById('custom-color-input');
+    if (customInput) {
+      customInput.value = savedCustom || '#9B7FCC';
+      customInput.addEventListener('input', function() {
+        var hex = customInput.value;
+        localStorage.setItem('gw-theme-color', 'custom');
+        localStorage.setItem('gw-theme-custom', hex);
+        applyColor('custom', hex);
+      });
+    }
+  });
+})();
+</script>
+
+<style>
+/* ===== 通知铃铛 ===== */
+.notif-wrap { position: relative; }
+.notif-badge {
+  position: absolute;
+  top: -4px; right: -4px;
+  background: var(--danger);
+  color: #fff;
+  font-size: 9px;
+  font-weight: 700;
+  min-width: 16px;
+  height: 16px;
+  border-radius: 8px;
+  padding: 0 3px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-body);
+  pointer-events: none;
+  animation: notif-pop 0.25s ease;
+}
+@keyframes notif-pop { from { transform: scale(0); } to { transform: scale(1); } }
+
+.notif-panel {
+  display: none;
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: 340px;
+  max-width: 90vw;
+  max-height: 480px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 8px 24px rgba(0,0,0,.14);
+  z-index: 300;
+  overflow: hidden;
+  flex-direction: column;
+}
+.notif-panel.show { display: flex; }
+
+.notif-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.notif-list {
+  overflow-y: auto;
+  flex: 1;
+  -webkit-overflow-scrolling: touch;
+}
+
+.notif-item {
+  display: flex;
+  gap: 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  transition: background 0.12s;
+  align-items: flex-start;
+}
+.notif-item:last-child { border-bottom: none; }
+.notif-item:hover { background: var(--bg-3); }
+.notif-item.unread { background: var(--accent-dim); }
+
+.notif-icon { font-size: 18px; flex-shrink: 0; margin-top: 1px; }
+.notif-body { flex: 1; min-width: 0; }
+.notif-short { font-size: 13px; font-weight: 500; color: var(--text); margin-bottom: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.notif-detail { font-size: 11px; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.notif-ts { font-size: 10px; color: var(--text-3); font-family: var(--font-mono); flex-shrink: 0; margin-top: 2px; }
+
+.notif-empty { padding: 24px; text-align: center; color: var(--text-3); font-size: 13px; }
+
+@media (max-width: 1024px) {
+  .notif-panel {
+    position: fixed;
+    top: 56px;
+    right: 8px;
+    left: 8px;
+    width: auto;
+    max-width: 100%;
+    border-radius: 12px;
+  }
+}
+</style>
+
+<script>
+/* ===== 通知系统 ===== */
+(function() {
+  var ADMIN_BASE = '{{ admin_base }}';
+  var lastReadTs = localStorage.getItem('notif-last-read') || '';
+  var panelOpen = false;
+  var allEvents = [];
+
+  function toggleNotifPanel() {
+    panelOpen = !panelOpen;
+    document.getElementById('notif-panel').classList.toggle('show', panelOpen);
+    if (panelOpen) {
+      loadNotifications();
+      document.addEventListener('click', outsideClick);
+    } else {
+      document.removeEventListener('click', outsideClick);
+    }
+  }
+  window.toggleNotifPanel = toggleNotifPanel;
+
+  function outsideClick(e) {
+    var wrap = document.getElementById('notif-wrap');
+    if (wrap && !wrap.contains(e.target)) {
+      panelOpen = false;
+      document.getElementById('notif-panel').classList.remove('show');
+      document.removeEventListener('click', outsideClick);
+    }
+  }
+
+  function markAllRead() {
+    if (allEvents.length) lastReadTs = allEvents[allEvents.length - 1].ts;
+    localStorage.setItem('notif-last-read', lastReadTs);
+    document.getElementById('notif-badge').style.display = 'none';
+    document.querySelectorAll('.notif-item.unread').forEach(function(el) {
+      el.classList.remove('unread');
+    });
+  }
+  window.markAllRead = markAllRead;
+
+  async function loadNotifications() {
+    var list = document.getElementById('notif-list');
+    try {
+      var resp = await fetch(ADMIN_BASE + '/notifications-api');
+      allEvents = await resp.json();
+      if (!Array.isArray(allEvents) || allEvents.length === 0) {
+        list.innerHTML = '<div class="notif-empty">暂无重要通知</div>';
+        return;
+      }
+      var html = '';
+      var unreadCount = 0;
+      allEvents.forEach(function(ev) {
+        var isUnread = ev.ts > lastReadTs;
+        if (isUnread) unreadCount++;
+        var cls = isUnread ? 'notif-item unread' : 'notif-item';
+        html += '<div class="' + cls + '" onclick="expandNotif(this)">' +
+          '<div class="notif-icon">' + (ev.icon || '📌') + '</div>' +
+          '<div class="notif-body">' +
+            '<div class="notif-short">' + escHtml(ev.short || '') + '</div>' +
+            '<div class="notif-detail" data-full="' + escAttr(ev.detail || '') + '">' +
+              truncate(ev.detail || '', 60) +
+            '</div>' +
+          '</div>' +
+          '<div class="notif-ts">' + (ev.ts || '').slice(5,16) + '</div>' +
+        '</div>';
+      });
+      list.innerHTML = html;
+      updateBadge(unreadCount);
+    } catch(e) {
+      list.innerHTML = '<div class="notif-empty">加载失败</div>';
+    }
+  }
+
+  function updateBadge(n) {
+    var badge = document.getElementById('notif-badge');
+    if (n > 0) {
+      badge.textContent = n > 99 ? '99+' : n;
+      badge.style.display = 'flex';
+    } else {
+      badge.style.display = 'none';
+    }
+  }
+
+  window.expandNotif = function(el) {
+    var detail = el.querySelector('.notif-detail');
+    if (!detail) return;
+    var full = detail.dataset.full || '';
+    detail.textContent = detail.textContent.length < full.length ? full : truncate(full, 60);
+  };
+
+  function truncate(s, n) { return s.length > n ? s.slice(0, n) + '…' : s; }
+  function escHtml(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+  function escAttr(s) { return s.replace(/"/g,'&quot;'); }
+
+  // 首次加载静默拉一次（只更新 badge，不显示面板）
+  document.addEventListener('DOMContentLoaded', function() {
+    fetch(ADMIN_BASE + '/notifications-api').then(function(r) { return r.json(); }).then(function(evs) {
+      if (!Array.isArray(evs)) return;
+      allEvents = evs;
+      var unread = evs.filter(function(e) { return e.ts > lastReadTs; }).length;
+      updateBadge(unread);
+    }).catch(function() {});
+  });
+
+  // 每 2 分钟静默刷新 badge
+  setInterval(function() {
+    fetch(ADMIN_BASE + '/notifications-api').then(function(r) { return r.json(); }).then(function(evs) {
+      if (!Array.isArray(evs)) return;
+      allEvents = evs;
+      var unread = evs.filter(function(e) { return e.ts > lastReadTs; }).length;
+      updateBadge(unread);
+    }).catch(function() {});
+  }, 120000);
+})();
+</script>
+
+<script>
+(function() {
+  var ADMIN_BASE = '{{ admin_base }}';
+  var pushSub = null;
+  function urlB64ToUint8Array(b64) {
+    var pad = '='.repeat((4 - b64.length % 4) % 4);
+    var raw = atob((b64 + pad).replace(/-/g, '+').replace(/_/g, '/'));
+    var arr = new Uint8Array(raw.length);
+    for (var i = 0; i < raw.length; i++) arr[i] = raw.charCodeAt(i);
+    return arr;
+  }
+  async function checkPushState() {
+    var btn = document.getElementById('push-subscribe-btn');
+    if (!btn || !('PushManager' in window)) { if(btn) btn.style.display='none'; return; }
+    var reg = await navigator.serviceWorker.ready;
+    var sub = await reg.pushManager.getSubscription();
+    pushSub = sub;
+    if (sub) { btn.textContent = '✅ 推送已开'; btn.classList.add('subscribed'); }
+    else { btn.textContent = '🔔 开启推送'; btn.classList.remove('subscribed'); }
+  }
+  window.togglePushSubscription = async function() {
+    var btn = document.getElementById('push-subscribe-btn');
+    if (!('PushManager' in window)) { alert('当前浏览器/App 不支持推送'); return; }
+    if (pushSub) {
+      await pushSub.unsubscribe();
+      await fetch(ADMIN_BASE + '/push-subscribe', {method:'DELETE', headers:{'Content-Type':'application/json'}, body: JSON.stringify({endpoint: pushSub.endpoint})});
+      pushSub = null; btn.textContent = '🔔 开启推送'; btn.classList.remove('subscribed'); return;
+    }
+    var perm = await Notification.requestPermission();
+    if (perm !== 'granted') { alert('请允许通知权限'); return; }
+    try {
+      btn.textContent = '⏳…';
+      var kr = await fetch(ADMIN_BASE + '/push-vapid-key');
+      var kd = await kr.json();
+      var reg = await navigator.serviceWorker.ready;
+      // Web Push 在中国无法使用（FCM 被屏蔽），加超时提示
+    var subPromise = reg.pushManager.subscribe({userVisibleOnly:true, applicationServerKey: urlB64ToUint8Array(kd.publicKey)});
+    var timeoutPromise = new Promise(function(_, rej) {
+      setTimeout(function() { rej(new Error('连接超时。Web Push 需要访问 Google FCM，在中国大陆网络下无法使用。
+
+请改用 PushPlus（微信推送）：在「网关设置→通知」里填入 PushPlus Token 即可。')); }, 8000);
+    });
+    var sub = await Promise.race([subPromise, timeoutPromise]);
+      await fetch(ADMIN_BASE + '/push-subscribe', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(sub.toJSON())});
+      pushSub = sub; btn.textContent = '✅ 推送已开'; btn.classList.add('subscribed');
+    } catch(e) { btn.textContent = '🔔 开启推送'; alert('订阅失败: ' + e.message); }
+  };
+  document.addEventListener('DOMContentLoaded', function() {
+    if ('serviceWorker' in navigator && 'PushManager' in window) checkPushState();
+    else { var b=document.getElementById('push-subscribe-btn'); if(b) b.style.display='none'; }
+  });
+})();
+</script>
+</body>
+</html>

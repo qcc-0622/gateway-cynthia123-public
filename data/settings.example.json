@@ -1,0 +1,47 @@
+{
+  "_comment": "运行时配置模板。首次运行时把此文件复制成 settings.json，按需填值。data/ 在 .gitignore，settings.json 实际不会进 git",
+
+  "summary_model": "",
+  "summary_upstream": "",
+  "summary_prompt": "你是一个对话摘要助手。请将以下对话精炼成简洁的中文摘要（150-250字），保留：主要话题与事件、情感状态、已建立的重要信息或约定。直接输出摘要内容，不要标题或前缀。",
+  "bp3_cycle_size": 9,
+  "bp3_frozen_rounds": 8,
+  "bp3_live_rounds": 24,
+
+  "model_prices": [
+    {
+      "_comment": "示例：每个上游+模型一行；price_type 'token' 按 token 计费，'per_call' 按次",
+      "upstream": "",
+      "model": "claude-sonnet-4-5",
+      "price_type": "token",
+      "price_per_call": 0,
+      "input": 3.0,
+      "output": 15.0,
+      "cache_write": 3.75,
+      "cache_read": 0.3
+    }
+  ],
+
+  "models_auto_refresh_on_client_pull": true,
+  "models_auto_refresh_cooldown_min": 30,
+
+  "memory_recall_enabled": true,
+  "memory_autofeed_enabled": true,
+  "ombre_url": "http://127.0.0.1:18001/mcp",
+  "ombre_token": "",
+  "ombre_buckets_dir": "/opt/ombre-brain/buckets",
+  "embed_url": "https://api.siliconflow.cn/v1/embeddings",
+  "embed_model": "BAAI/bge-m3",
+  "embed_api_key": "",
+  "memory_new_topic_threshold": 0.55,
+  "memory_max_recall": 5,
+  "memory_random_k": 5,
+  "memory_force_every": 15,
+  "memory_breath_max_results": 8,
+  "memory_breath_max_tokens": 2000,
+
+  "notify_pushplus_token": "",
+  "notify_ntfy_url": "",
+  "notify_balance_threshold": 5.0,
+  "notify_balance_interval_hours": 6
+}

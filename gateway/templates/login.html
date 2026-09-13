@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>登录 — Chat Gateway</title>
+<link rel="stylesheet" href="/chat-gateway/static/style.css">
+</head>
+<body>
+<div class="login-wrap">
+  <div class="login-box">
+    <div class="login-logo">
+      <div class="icon">🔀</div>
+      <h2>Chat Gateway</h2>
+      <p>请输入管理密码</p>
+    </div>
+    <form method="post" action="{{ admin_base }}/login">
+      <div class="form-group">
+        <label class="form-label">管理密码</label>
+        <input type="password" name="password" placeholder="••••••••" autofocus required>
+      </div>
+      {% if error %}
+      <div class="alert alert-error">{{ error }}</div>
+      {% endif %}
+      <button type="submit" class="btn btn-primary">登录</button>
+    </form>
+  </div>
+</div>
+</body>
+</html>

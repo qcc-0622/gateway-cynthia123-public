@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+{% block title %}对话记录{% endblock %}
+{% block page_title %}对话记录{% endblock %}
+{% block page_sub %}所有存档的对话{% endblock %}
+
+{% block content %}
+<form method="get" action="{{ admin_base }}/logs">
+  <div class="search-row">
+    <input type="search" name="search" value="{{ search }}" placeholder="搜索消息内容…">
+    <button type="submit" class="btn btn-ghost">搜索</button>
+    {% if search %}
+    <a href="{{ admin_base }}/logs" class="btn btn-ghost">清除</a>
+    {% endif %}
+    <a href="{{ admin_base }}/timeline" class="btn btn-ghost">🕰️ 全局时间线</a>
+  </div>
+</form>
+
+{% if request.query_params.get('deleted') %}
+<div class="alert alert-success" style="margin:10px 0">✅ 已删除 {{ request.query_params.get('deleted') }} 行</div>
+{% endif %}
+{% if request.query_params.get('err') == 'missing_range' %}
+<div class="alert alert-error" style="margin:10px 0">⚠️ 请至少填写开始或结束时间</div>
+{% endif %}
+
+<!-- 按时间范围批量删除 -->
+<details class="desktop-only" style="margin-bottom:14px">
+  <summary style="cursor:pointer;font-size:13px;color:var(--text-3);padding:6px 0">
+    🗑 按时间范围批量删除 …
+  </summary>
+  <form method="post" action="{{ admin_base }}/logs/delete-range"
+        onsubmit="return confirm('确认删除选定时间范围内的所有对话记录？此操作不可撤销。')"
+        style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">
+    <div>
+      <label style="font-size:11px;color:var(--text-3);display:block;margin-bottom:3px">开始时间</label>
+      <input type="datetime-local" name="start" step="1" style="font-size:12px">
+    </div>
+    <div>
+      <label style="font-size:11px;color:var(--text-3);display:block;margin-bottom:3px">结束时间</label>
+      <input type="datetime-local" name="end" step="1" style="font-size:12px">
+    </div>
+    <button type="submit" class="btn btn-danger btn-sm">删除范围内</button>
+    <span style="font-size:11px;color:var(--text-3)">两个都不填会拒绝。结束时间为开区间（不包含）</span>
+  </form>
+</details>
+
+<div style="font-size:13px;color:var(--text-3);margin-bottom:14px">
+  共 <strong style="color:var(--text)">{{ total }}</strong> 个对话{% if search %}（含 "{{ search }}"）{% endif %}
+</div>
+
+<div class="card" style="padding:0;overflow:hidden">
+{% if conversations %}
+<table class="conv-table">
+  <thead>
+    <tr>
+      <th>对话 ID</th>
+      <th>开始时间</th>
+      <th>最近时间</th>
+      <th>消息</th>
+      <th>模型</th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for conv in conversations %}
+    <tr>
+      <td><code>{{ conv.conversation_id[:16] }}…</code></td>
+      <td style="color:var(--text-2)">{{ conv.first_time[:19].replace("T", " ") }}</td>
+      <td style="color:var(--text-2)">{{ conv.last_time[:19].replace("T", " ") }}</td>
+      <td><span style="color:var(--accent-light);font-weight:600">{{ conv.msg_count }}</span></td>
+      <td style="color:var(--text-3)"><small>{{ conv.model or "—" }}</small></td>
+      <td style="white-space:nowrap">
+        <a href="{{ admin_base }}/logs/{{ conv.conversation_id }}" class="btn btn-ghost btn-sm">查看</a>
+        <form method="post" action="{{ admin_base }}/logs/{{ conv.conversation_id }}/delete"
+              onsubmit="return confirm('确认删除这次对话的所有记录？')"
+              style="display:inline">
+          <button type="submit" class="btn btn-danger btn-sm">删</button>
+        </form>
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<div style="padding:48px;text-align:center;color:var(--text-3)">
+  <div style="font-size:32px;margin-bottom:10px">📭</div>
+  <div>暂无对话记录</div>
+</div>
+{% endif %}
+</div>
+
+{% if total_pages > 1 %}
+<div class="pagination">
+  {% if page > 1 %}
+    <a href="?page={{ page - 1 }}{% if search %}&search={{ search }}{% endif %}" class="btn btn-ghost btn-sm">← 上一页</a>
+  {% endif %}
+  <span>第 {{ page }} / {{ total_pages }} 页</span>
+  {% if page < total_pages %}
+    <a href="?page={{ page + 1 }}{% if search %}&search={{ search }}{% endif %}" class="btn btn-ghost btn-sm">下一页 →</a>
+  {% endif %}
+</div>
+{% endif %}
+{% endblock %}

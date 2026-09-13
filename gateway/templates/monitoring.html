@@ -1,0 +1,736 @@
+{% extends "base.html" %}
+{% block title %}缓存监控{% endblock %}
+{% block page_title %}缓存监控{% endblock %}
+{% block page_sub %}Token 用量与费用追踪 · 费用按各模型自定义价格计算{% endblock %}
+
+{% block content %}
+<div style="display:flex;gap:10px;margin-bottom:20px;flex-wrap:wrap;align-items:center">
+  <span style="font-size:13px;color:var(--text-3)">时间范围：</span>
+  {% for d in [3, 7, 14, 30] %}
+  <a href="?days={{ d }}" class="btn {% if days == d %}btn-primary{% else %}btn-ghost{% endif %} btn-sm">{{ d }}天</a>
+  {% endfor %}
+</div>
+
+<!-- 总览卡片 -->
+<div class="stat-grid" style="margin-bottom:20px">
+  <div class="stat-card">
+    <div class="num" style="color:var(--accent-light)">${{ total_cost }}</div>
+    <div class="label">总费用（{{ days }}天）</div>
+  </div>
+  <div class="stat-card">
+    <div class="num" style="color:#2ea44f">${{ total_saved }}</div>
+    <div class="label">缓存节省</div>
+  </div>
+  <div class="stat-card">
+    <div class="num" style="color:{% if total_hit_rate >= 70 %}#2ea44f{% elif total_hit_rate >= 40 %}var(--accent-light){% else %}#e07060{% endif %}">{{ total_hit_rate }}%</div>
+    <div class="label">命中率（含写入）</div>
+    <div style="font-size:13px;color:var(--text-2);margin-top:8px;padding-top:6px;border-top:1px solid var(--border)">
+      <span style="color:var(--accent-light);font-weight:600">{{ total_reuse_rate }}%</span>
+      <span style="font-size:11px;color:var(--text-3)"> 复用率（不含写入）</span>
+    </div>
+  </div>
+  <div class="stat-card">
+    <div class="num" style="font-size:1.4rem">${{ avg_cost_per_msg }}</div>
+    <div class="label">均价/条（{{ totals.messages }} 条）</div>
+  </div>
+</div>
+
+<!-- Token 拆分 -->
+<div class="card" style="margin-bottom:20px">
+  <div class="card-title">Token 分布（{{ days }}天合计）</div>
+  {% set total_tok = totals.input + totals.output + totals.cache_write + totals.cache_read %}
+  {% if total_tok > 0 %}
+  <div class="token-grid" style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:14px">
+    <div>
+      <div style="font-size:11px;color:var(--text-3);margin-bottom:4px">输入（未命中）</div>
+      <div style="font-size:16px;font-weight:700;color:var(--text)">{{ "{:,}".format(totals.input) }}</div>
+      <div style="font-size:11px;color:var(--text-3)">${{ "%.4f"|format(totals.input * PRICE.input / 1000000) }}</div>
+    </div>
+    <div>
+      <div style="font-size:11px;color:var(--text-3);margin-bottom:4px">输出</div>
+      <div style="font-size:16px;font-weight:700;color:#d4a03a">{{ "{:,}".format(totals.output) }}</div>
+      <div style="font-size:11px;color:var(--text-3)">${{ "%.4f"|format(totals.output * PRICE.output / 1000000) }}</div>
+    </div>
+    <div>
+      <div style="font-size:11px;color:var(--text-3);margin-bottom:4px">缓存写入 (1.25x)</div>
+      <div style="font-size:16px;font-weight:700;color:#e07060">{{ "{:,}".format(totals.cache_write) }}</div>
+      <div style="font-size:11px;color:var(--text-3)">${{ "%.4f"|format(totals.cache_write * PRICE.cache_write / 1000000) }}</div>
+    </div>
+    <div>
+      <div style="font-size:11px;color:var(--text-3);margin-bottom:4px">缓存命中 (0.1x)</div>
+      <div style="font-size:16px;font-weight:700;color:#2ea44f">{{ "{:,}".format(totals.cache_read) }}</div>
+      <div style="font-size:11px;color:var(--text-3)">${{ "%.4f"|format(totals.cache_read * PRICE.cache_read / 1000000) }}</div>
+    </div>
+  </div>
+  <!-- Token bar -->
+  {% set i_pct = (totals.input / total_tok * 100)|round(1) %}
+  {% set o_pct = (totals.output / total_tok * 100)|round(1) %}
+  {% set cw_pct = (totals.cache_write / total_tok * 100)|round(1) %}
+  {% set cr_pct = (totals.cache_read / total_tok * 100)|round(1) %}
+  <div style="height:10px;border-radius:5px;overflow:hidden;display:flex">
+    <div style="width:{{ i_pct }}%;background:var(--text-3)" title="输入 {{ i_pct }}%"></div>
+    <div style="width:{{ o_pct }}%;background:#d4a03a" title="输出 {{ o_pct }}%"></div>
+    <div style="width:{{ cw_pct }}%;background:#e07060" title="缓存写 {{ cw_pct }}%"></div>
+    <div style="width:{{ cr_pct }}%;background:#2ea44f" title="缓存读 {{ cr_pct }}%"></div>
+  </div>
+  <div style="font-size:11px;color:var(--text-3);margin-top:6px;display:flex;gap:14px;flex-wrap:wrap">
+    <span>⬛ 输入 {{ i_pct }}%</span>
+    <span style="color:#d4a03a">■ 输出 {{ o_pct }}%</span>
+    <span style="color:#e07060">■ 缓存写 {{ cw_pct }}%</span>
+    <span style="color:#2ea44f">■ 缓存读 {{ cr_pct }}%</span>
+  </div>
+  {% else %}
+  <p style="color:var(--text-3)">暂无数据，先用 Anthropic 格式聊几轮吧。</p>
+  {% endif %}
+</div>
+
+<!-- 按模型统计 -->
+{% if models %}
+<div class="card" style="padding:0;overflow:hidden;margin-bottom:20px">
+  <div style="padding:14px 16px 0;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-3)">
+    按 (中转站 × 模型) 统计（{{ days }}天 · {{ models|length }} 个组合）
+  </div>
+  {% set unpriced = models | selectattr("has_price", "equalto", false) | list %}
+  {% if unpriced %}
+  <div style="margin:10px 16px 0;padding:10px 14px;background:rgba(212,160,58,.1);border:1px solid rgba(212,160,58,.4);border-radius:8px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+    <span style="font-size:13px;color:#d4a03a">⚠️ <strong>{{ unpriced|length }} 个模型</strong>既没手工配价、上游也没同步到价，按 Opus 4 默认价计算，可能不准</span>
+    {# 同步按钮不依赖总开关（手动点一下就能看价格），开关只控制后台定时刷新 #}
+    <form method="post" action="{{ admin_base }}/upstreams/refresh-all-prices" style="margin-left:auto">
+      <button type="submit" class="btn btn-ghost btn-sm" style="white-space:nowrap">🔄 立即同步上游价格</button>
+    </form>
+    {% if not auto_price.enabled %}
+    <a href="{{ admin_base }}/gateway-settings#prices" style="font-size:12px;color:var(--accent);white-space:nowrap">→ 开启定时自动同步</a>
+    {% endif %}
+  </div>
+  {% endif %}
+  <div style="padding:0 16px 12px;font-size:11px;color:var(--text-3);margin-top:6px">
+    切换不同模型时缓存会重新建立。命中率低 = 用得少 / 切太频繁 / 长上下文没复用。
+    <span style="margin-left:8px">单价来源：<span style="color:var(--accent-light)">手工</span> / <span style="color:#2ea44f">自动</span> / <span style="color:#e07060">⚠️ 默认价</span></span>
+  </div>
+  <div class="filter-bar" data-filter="stats">
+    <select class="filter-upstream" data-target=".model-stat-table">
+      <option value="">全部中转站</option>
+    </select>
+    <input type="search" class="filter-model" data-target=".model-stat-table" placeholder="搜索模型名…">
+    <select class="filter-health" data-target=".model-stat-table">
+      <option value="">全部健康度</option>
+      <option value="极佳">🟢 极佳</option>
+      <option value="良好">🟡 良好</option>
+      <option value="偏低">🟠 偏低</option>
+      <option value="差">🔴 差</option>
+      <option value="无缓存">⚪ 无缓存</option>
+    </select>
+    <span class="filter-count" data-target=".model-stat-table"></span>
+  </div>
+  <div style="overflow-x:auto">
+  <table class="model-stat-table" style="min-width:1400px">
+    <thead>
+      <tr>
+        <th style="white-space:nowrap">中转站</th>
+        <th style="min-width:240px">模型</th>
+        <th style="white-space:nowrap">消息</th>
+        <th style="white-space:nowrap">输入</th>
+        <th style="white-space:nowrap">输出</th>
+        <th style="white-space:nowrap">缓存写</th>
+        <th style="white-space:nowrap">缓存读</th>
+        <th style="white-space:nowrap">命中率</th>
+        <th style="white-space:nowrap">复用率</th>
+        <th style="white-space:nowrap">健康度</th>
+        <th style="white-space:nowrap">费用</th>
+        <th style="white-space:nowrap">节省</th>
+        <th style="white-space:nowrap">均价/条</th>
+        <th style="white-space:nowrap">最近使用</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for m in models %}
+    <tr>
+      <td style="white-space:nowrap"><code style="font-size:11px">{{ m.upstream }}</code></td>
+      <td style="min-width:240px">
+        <code style="font-size:12px;white-space:nowrap">{{ m.model }}</code>
+        {% if not m.has_price %}
+        <span title="既没手工配价，上游也没同步到价 → 用默认 Opus 4 价格计算" style="color:#e07060;margin-left:4px">⚠️</span>
+        {% elif m.price_source == 'auto' %}
+        <span title="单价来自上游 new-api /api/pricing 自动同步" style="color:#2ea44f;margin-left:4px;font-size:10px">自动</span>
+        {% else %}
+        <span title="单价来自手工配置的价格表" style="color:var(--accent-light);margin-left:4px;font-size:10px">手工</span>
+        {% endif %}
+        {% if m.model_differs %}
+        <div style="font-size:10px;color:var(--text-3);margin-top:2px;white-space:nowrap">→ {{ m.upstream_model }}</div>
+        {% endif %}
+      </td>
+      <td style="white-space:nowrap">{{ m.messages }}</td>
+      <td style="white-space:nowrap;color:var(--text-2)">{{ "{:,}".format(m.input) }}</td>
+      <td style="white-space:nowrap;color:#d4a03a">{{ "{:,}".format(m.output) }}</td>
+      <td style="white-space:nowrap;color:#e07060">{{ "{:,}".format(m.cache_write) }}</td>
+      <td style="white-space:nowrap;color:#2ea44f">{{ "{:,}".format(m.cache_read) }}</td>
+      <td style="white-space:nowrap">
+        <span style="color:{% if m.hit_rate >= 70 %}#2ea44f{% elif m.hit_rate >= 40 %}var(--accent-light){% elif m.hit_rate >= 15 %}#d4a03a{% else %}#e07060{% endif %}">
+          {{ m.hit_rate }}%
+        </span>
+      </td>
+      <td style="white-space:nowrap">
+        <span style="color:{% if m.reuse_rate >= 70 %}#2ea44f{% elif m.reuse_rate >= 40 %}var(--accent-light){% elif m.reuse_rate >= 15 %}#d4a03a{% else %}#e07060{% endif %}">
+          {{ m.reuse_rate }}%
+        </span>
+      </td>
+      <td style="white-space:nowrap">
+        {% if m.health == 'excellent' %}<span style="color:#2ea44f">🟢 极佳</span>
+        {% elif m.health == 'good' %}<span style="color:var(--accent-light)">🟡 良好</span>
+        {% elif m.health == 'weak' %}<span style="color:#d4a03a">🟠 偏低</span>
+        {% elif m.health == 'poor' %}<span style="color:#e07060">🔴 差</span>
+        {% else %}<span style="color:var(--text-3)">⚪ 无缓存</span>
+        {% endif %}
+      </td>
+      <td style="white-space:nowrap;color:var(--accent-light)">${{ m.cost }}</td>
+      <td style="white-space:nowrap;color:#2ea44f">${{ m.saved }}</td>
+      <td style="white-space:nowrap;color:var(--text-2)">${{ m.avg_cost }}</td>
+      <td style="white-space:nowrap;font-size:11px;color:var(--text-3)">{{ m.last_used }}</td>
+      <td style="white-space:nowrap">
+        {% if not m.has_price %}
+        <button class="btn btn-ghost btn-sm quick-price-btn"
+                data-upstream="{{ m.upstream }}"
+                data-model="{{ m.model }}"
+                onclick="openQuickPrice(this)"
+                style="border-color:rgba(212,160,58,.5);color:#d4a03a;white-space:nowrap">
+          ⚡ 快捷定价
+        </button>
+        {% else %}
+        <button class="btn btn-ghost btn-sm"
+                data-upstream="{{ m.upstream }}"
+                data-model="{{ m.model }}"
+                onclick="openQuickPrice(this)"
+                style="border-color:rgba(91,166,125,.4);color:var(--success);white-space:nowrap;font-size:11px">
+          ✓ 已定价
+        </button>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+{% endif %}
+
+<!-- 每日明细 -->
+{% if daily %}
+<div class="card" style="padding:0;overflow:hidden">
+  <div style="padding:14px 16px 0;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-3)">
+    每日明细 <span style="text-transform:none;letter-spacing:0;font-weight:400">· 点击日期行展开当天各模型费用</span>
+  </div>
+  <table class="daily-table">
+    <thead>
+      <tr>
+        <th>日期</th>
+        <th>消息</th>
+        <th>输入</th>
+        <th>输出</th>
+        <th>缓存写</th>
+        <th>缓存读</th>
+        <th>命中率</th>
+        <th>复用率</th>
+        <th>费用</th>
+        <th>节省</th>
+        <th>均价/条</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for row in daily %}
+    <tr data-day-row="{{ row.day }}" style="cursor:pointer" title="点击展开当天各模型明细">
+      <td><code style="font-size:12px">{{ row.day }}</code></td>
+      <td>{{ row.messages }}</td>
+      <td style="color:var(--text-2)">{{ "{:,}".format(row.input) }}</td>
+      <td style="color:#d4a03a">{{ "{:,}".format(row.output) }}</td>
+      <td style="color:#e07060">{{ "{:,}".format(row.cache_write) }}</td>
+      <td style="color:#2ea44f">{{ "{:,}".format(row.cache_read) }}</td>
+      <td>
+        <span style="color:{% if row.hit_rate >= 70 %}#2ea44f{% elif row.hit_rate >= 40 %}var(--accent-light){% else %}#e07060{% endif %}">
+          {{ row.hit_rate }}%
+        </span>
+      </td>
+      <td>
+        <span style="color:{% if row.reuse_rate >= 70 %}#2ea44f{% elif row.reuse_rate >= 40 %}var(--accent-light){% else %}#e07060{% endif %}">
+          {{ row.reuse_rate }}%
+        </span>
+      </td>
+      <td style="color:var(--accent-light)">${{ row.cost }}</td>
+      <td style="color:#2ea44f">${{ row.saved }}</td>
+      <td style="color:var(--text-2)">${{ row.avg_cost }}</td>
+    </tr>
+    {# 当天各模型费用明细（2026-09-06：细化到每个模型用了多少钱、均价多少） #}
+    <tr id="day-models-{{ row.day }}" style="display:none">
+      <td colspan="11" style="padding:10px 14px 14px 26px;background:rgba(128,128,128,0.06)">
+        {% if row.models %}
+        <table style="width:100%;font-size:12px;border-collapse:collapse">
+          <thead>
+            <tr>
+              <th style="text-align:left;padding:4px 8px;color:var(--text-3);font-weight:600">模型</th>
+              <th style="text-align:left;padding:4px 8px;color:var(--text-3);font-weight:600">中转站</th>
+              <th style="text-align:right;padding:4px 8px;color:var(--text-3);font-weight:600">次数</th>
+              <th style="text-align:right;padding:4px 8px;color:var(--text-3);font-weight:600">输入</th>
+              <th style="text-align:right;padding:4px 8px;color:var(--text-3);font-weight:600">输出</th>
+              <th style="text-align:right;padding:4px 8px;color:var(--text-3);font-weight:600">缓存读</th>
+              <th style="text-align:right;padding:4px 8px;color:var(--text-3);font-weight:600">费用</th>
+              <th style="text-align:right;padding:4px 8px;color:var(--text-3);font-weight:600">均价/条</th>
+            </tr>
+          </thead>
+          <tbody>
+          {% for m in row.models %}
+            <tr style="border-top:1px solid rgba(128,128,128,0.15)">
+              <td style="padding:4px 8px"><code style="font-size:11px">{{ m.model }}</code></td>
+              <td style="padding:4px 8px;color:var(--text-2)">{{ m.upstream }}</td>
+              <td style="text-align:right;padding:4px 8px">{{ m.messages }}</td>
+              <td style="text-align:right;padding:4px 8px;color:var(--text-2)">{{ "{:,}".format(m.input) }}</td>
+              <td style="text-align:right;padding:4px 8px;color:#d4a03a">{{ "{:,}".format(m.output) }}</td>
+              <td style="text-align:right;padding:4px 8px;color:#2ea44f">{{ "{:,}".format(m.cache_read) }}</td>
+              <td style="text-align:right;padding:4px 8px;color:var(--accent-light)">${{ m.cost }}</td>
+              <td style="text-align:right;padding:4px 8px;color:var(--text-2)">${{ m.avg_cost }}</td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+        {% else %}
+        <div style="font-size:12px;color:var(--text-3)">当天无模型明细</div>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+<!-- 已配置的所有价格 -->
+<div class="card" style="margin-top:20px;padding:0;overflow:hidden">
+  <div style="padding:14px 16px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+    <div>
+      <div style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-3)">
+        已配置的模型单价（$/百万 token）
+      </div>
+      <div style="font-size:11px;color:var(--text-3);margin-top:4px">
+        {% if has_custom_price %}
+          手工 {{ price_entries|length }} 条
+          {% if auto_price.count %}
+          · 上游自动同步 {{ auto_price.count }} 条{% if auto_price.synced_at %}（{{ auto_price.synced_at[:19]|replace("T", " ") }}）{% endif %}
+          {% endif %}
+          {% if not price_entries and auto_price.count %}
+          <span style="color:var(--text-3)">· 未配手工价格时全部走自动同步价</span>
+          {% endif %}
+        {% else %}
+          未配置任何价格，全部按 Opus 4 默认价计算
+        {% endif %}
+      </div>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <form method="post" action="{{ admin_base }}/upstreams/refresh-all-prices" style="margin:0">
+        <button type="submit" class="btn btn-ghost btn-sm" title="重新拉取所有上游的 new-api /api/pricing（不依赖定时开关）">🔄 同步价格</button>
+      </form>
+      <a href="{{ admin_base }}/gateway-settings#price-list" class="btn btn-ghost btn-sm">→ 去网关设置编辑价格</a>
+    </div>
+  </div>
+
+  {# 自动同步状态：每个上游一行，失败/回退分组都明说，别让用户以为价格一定是准的 #}
+  {% if auto_price.count or auto_price.upstreams %}
+  <div style="padding:0 16px 12px">
+    <div style="font-size:11px;color:var(--text-3);margin-bottom:6px">
+      上游价格自动同步（new-api /api/pricing）{% if not auto_price.enabled %}<span style="color:#d4a03a"> · 总开关已关闭，当前用的是上次同步结果</span>{% endif %}
+    </div>
+    <div style="display:flex;flex-direction:column;gap:4px">
+      {% for name, meta in auto_price.upstreams.items() %}
+      <div style="font-size:11px;color:var(--text-2);display:flex;gap:8px;flex-wrap:wrap;align-items:baseline">
+        <code style="font-size:11px">{{ name }}</code>
+        {% if meta.ok %}
+        <span style="color:#2ea44f">✓ {{ meta.count }} 个模型</span>
+        {% else %}
+        <span style="color:#e07060">✗ 同步失败{% if meta.stale %}（仍用 {{ meta.count }} 条旧价格）{% endif %}</span>
+        {% endif %}
+        {% if meta.group %}<span style="color:var(--text-3)">分组 {{ meta.group }} ×{{ meta.group_ratio }}</span>{% endif %}
+        {% if meta.synced_at %}<span style="color:var(--text-3)">{{ meta.synced_at[:19]|replace("T", " ") }}</span>{% endif %}
+        {% if meta.warning %}<span style="color:#d4a03a">⚠️ {{ meta.warning }}</span>{% endif %}
+        {% if meta.error %}<span style="color:#e07060">{{ meta.error }}</span>{% endif %}
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+  {% if price_entries %}
+  <div class="filter-bar" data-filter="prices">
+    <select class="filter-upstream" data-target=".price-table">
+      <option value="">全部中转站</option>
+    </select>
+    <input type="search" class="filter-model" data-target=".price-table" placeholder="搜索模型名…">
+    <span class="filter-count" data-target=".price-table"></span>
+  </div>
+  <div style="overflow-x:auto">
+  <table class="price-table" style="min-width:900px">
+    <thead>
+      <tr>
+        <th style="white-space:nowrap">中转站</th>
+        <th style="min-width:240px">模型</th>
+        <th style="white-space:nowrap;text-align:right">输入</th>
+        <th style="white-space:nowrap;text-align:right">输出</th>
+        <th style="white-space:nowrap;text-align:right">缓存写</th>
+        <th style="white-space:nowrap;text-align:right">缓存读</th>
+        <th style="white-space:nowrap;text-align:right">写/输入</th>
+        <th style="white-space:nowrap;text-align:right">读折扣</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for e in price_entries %}
+    {% set p = e.prices %}
+    <tr>
+      <td style="white-space:nowrap">
+        {% if e.upstream %}
+        <code style="font-size:11px">{{ e.upstream }}</code>
+        {% else %}
+        <span style="font-size:11px;color:var(--text-3);font-style:italic">（任意）</span>
+        {% endif %}
+      </td>
+      <td style="min-width:240px"><code style="font-size:12px;white-space:nowrap">{{ e.model }}</code></td>
+      <td style="white-space:nowrap;text-align:right;color:var(--text)">${{ "%.4f"|format(p.input) }}</td>
+      <td style="white-space:nowrap;text-align:right;color:#d4a03a">${{ "%.4f"|format(p.output) }}</td>
+      <td style="white-space:nowrap;text-align:right;color:#e07060">${{ "%.4f"|format(p.cache_write) }}</td>
+      <td style="white-space:nowrap;text-align:right;color:#2ea44f">${{ "%.4f"|format(p.cache_read) }}</td>
+      <td style="white-space:nowrap;text-align:right;font-size:11px;color:var(--text-3)">
+        {% if p.input > 0 %}{{ "%.2f"|format(p.cache_write / p.input) }}x{% else %}—{% endif %}
+      </td>
+      <td style="white-space:nowrap;text-align:right;font-size:11px;color:var(--text-3)">
+        {% if p.input > 0 %}{{ "%.1f"|format((1 - p.cache_read / p.input) * 100) }}%{% else %}—{% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}
+  <div style="padding:24px;text-align:center;color:var(--text-3);font-size:13px">
+    {% if auto_price.count %}
+    没有手工价格规则——上面各模型的费用走的是上游自动同步价（{{ auto_price.count }} 条）。
+    {% else %}
+    暂无价格配置。<a href="{{ admin_base }}/gateway-settings#prices">去配置 →</a>
+    {% endif %}
+    <div style="font-size:11px;margin-top:6px">Token 分布面板的估算单价：{{ PRICE_LABEL }} — 输入 ${{ PRICE.input }} / 输出 ${{ PRICE.output }} / 缓存写 ${{ PRICE.cache_write }} / 缓存读 ${{ PRICE.cache_read }}</div>
+  </div>
+  {% endif %}
+</div>
+
+<!-- 数据管理 -->
+<div style="margin-top:16px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+  {% if request.query_params.get('cleared') %}
+  <span style="font-size:12px;color:#2ea44f">✅ 已清除 {{ request.query_params.get('cleared') }} 条旧数据</span>
+  {% endif %}
+  <form method="post" action="{{ admin_base }}/clear-zero-cache"
+        onsubmit="return confirm('确认清空所有统计数据？此操作不可撤销。')">
+    <button type="submit" class="btn btn-danger btn-sm">🗑 清空所有统计数据</button>
+  </form>
+  <span style="font-size:11px;color:var(--text-3)">清空后重新开始统计，对话记录不受影响</span>
+</div>
+
+{% if not has_cache_data %}
+<div style="font-size:11px;color:var(--text-3);margin-top:14px">
+  ℹ️ 当前时间范围内暂无缓存命中记录，可能对话轮次较少或尚未触发缓存。
+</div>
+{% endif %}
+<script>
+/* ===== 表格筛选器 ===== */
+(function() {
+  function collectUpstreams(tableSel, colIdx) {
+    var table = document.querySelector(tableSel);
+    if (!table) return [];
+    var rows = table.querySelectorAll('tbody tr');
+    var set = new Set();
+    rows.forEach(function(r) {
+      var td = r.children[colIdx];
+      if (td) {
+        var txt = td.textContent.trim();
+        if (txt && txt !== '(任意)' && txt !== '（任意）') set.add(txt);
+      }
+    });
+    return Array.from(set).sort();
+  }
+
+  function applyFilter(bar) {
+    var tableSel = bar.querySelector('[data-target]').dataset.target;
+    var table = document.querySelector(tableSel);
+    if (!table) return;
+    var upstream = (bar.querySelector('.filter-upstream') || {}).value || '';
+    var modelKw = ((bar.querySelector('.filter-model') || {}).value || '').toLowerCase().trim();
+    var health = (bar.querySelector('.filter-health') || {}).value || '';
+    var rows = table.querySelectorAll('tbody tr');
+    var shown = 0;
+    rows.forEach(function(r) {
+      var upText = (r.children[0] || {}).textContent || '';
+      var modelText = (r.children[1] || {}).textContent || '';
+      var healthText = r.textContent;
+      var ok = true;
+      if (upstream && upText.trim() !== upstream) ok = false;
+      if (modelKw && modelText.toLowerCase().indexOf(modelKw) === -1) ok = false;
+      if (health && healthText.indexOf(health) === -1) ok = false;
+      r.style.display = ok ? '' : 'none';
+      if (ok) shown++;
+    });
+    var counter = bar.querySelector('.filter-count');
+    if (counter) counter.textContent = shown + ' / ' + rows.length;
+  }
+
+  document.addEventListener('DOMContentLoaded', function() {
+    document.querySelectorAll('.filter-bar').forEach(function(bar) {
+      var sel = bar.querySelector('.filter-upstream');
+      if (sel) {
+        var tableSel = sel.dataset.target;
+        var ups = collectUpstreams(tableSel, 0);
+        ups.forEach(function(u) {
+          var opt = document.createElement('option');
+          opt.value = u; opt.textContent = u;
+          sel.appendChild(opt);
+        });
+      }
+      bar.querySelectorAll('select, input').forEach(function(el) {
+        el.addEventListener('input', function() { applyFilter(bar); });
+        el.addEventListener('change', function() { applyFilter(bar); });
+      });
+      applyFilter(bar);  // 初始化计数
+    });
+  });
+})();
+
+
+// 快速定价一键计算
+function autoFillQuickPrices() {
+  const inputEl = document.getElementById('qp-input');
+  const outputEl = document.getElementById('qp-output');
+  const cwEl = document.getElementById('qp-cw');
+  const crEl = document.getElementById('qp-cr');
+  
+  if (!inputEl || !outputEl || !cwEl || !crEl) return;
+  
+  const inputPrice = parseFloat(inputEl.value) || 0;
+  if (inputPrice <= 0) {
+    alert('请先填写输入价格');
+    inputEl.focus();
+    return;
+  }
+  
+  // 倍率：输出 = 5x，缓存写 = 1.25x，缓存读 = 0.1x
+  outputEl.value = (inputPrice * 5).toFixed(2);
+  cwEl.value = (inputPrice * 1.25).toFixed(3);
+  crEl.value = (inputPrice * 0.1).toFixed(3);
+  
+  // 高亮提示
+  [outputEl, cwEl, crEl].forEach(el => {
+    el.style.background = 'rgba(34,197,94,0.15)';
+    el.style.transition = 'background 0.3s';
+  });
+  
+  setTimeout(() => {
+    [outputEl, cwEl, crEl].forEach(el => {
+      el.style.background = '';
+    });
+  }, 1000);
+}
+
+</script>
+
+<!-- 快捷定价弹窗 -->
+<div id="quick-price-modal" style="display:none;position:fixed;inset:0;z-index:1000;background:rgba(0,0,0,.45);align-items:center;justify-content:center;padding:16px">
+  <div style="background:var(--bg-2);border:1px solid var(--border);border-radius:14px;width:100%;max-width:440px;box-shadow:0 16px 40px rgba(0,0,0,.2)">
+    <div style="padding:16px 20px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
+      <div>
+        <div style="font-size:15px;font-weight:600">⚡ 快捷定价</div>
+        <div id="qp-title" style="font-size:12px;color:var(--text-3);margin-top:2px"></div>
+      </div>
+      <button onclick="closeQuickPrice()" style="background:none;border:none;font-size:20px;cursor:pointer;color:var(--text-3);padding:4px">×</button>
+    </div>
+    <div style="padding:16px 20px">
+      <div style="display:flex;gap:0;border:1px solid var(--border);border-radius:8px;overflow:hidden;margin-bottom:14px">
+        <button type="button" id="qp-type-token" onclick="qpSetType('token')"
+                style="flex:1;padding:6px 12px;border:none;cursor:pointer;font-size:13px;background:var(--accent);color:#fff;font-weight:600">
+          按 Token
+        </button>
+        <button type="button" id="qp-type-call" onclick="qpSetType('per_call')"
+                style="flex:1;padding:6px 12px;border:none;cursor:pointer;font-size:13px;background:var(--bg-3);color:var(--text-2)">
+          按次调用
+        </button>
+      </div>
+
+      <!-- 按 Token 字段 -->
+      <div id="qp-token-fields">
+        <p style="font-size:12px;color:var(--text-3);margin-bottom:10px">
+          单位：美元 / 百万 token。填 0 表示不计此项费用。
+          <a href="https://www.anthropic.com/pricing" target="_blank" style="color:var(--accent)">参考价格 →</a>
+        </p>
+        <div class="qp-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+        <div>
+          <label style="font-size:12px;color:var(--text-2);font-weight:600;display:block;margin-bottom:5px">输入</label>
+          <input type="number" id="qp-input" step="0.01" min="0" placeholder="如 3.00">
+          <button type="button" class="btn btn-ghost btn-sm" style="margin-top:6px;font-size:11px;padding:4px 10px;width:100%" onclick="autoFillQuickPrices()" title="根据输入价格自动计算其他字段">⚡ 一键计算</button>
+        </div>
+        <div>
+          <label style="font-size:12px;color:var(--text-2);font-weight:600;display:block;margin-bottom:5px">输出</label>
+          <input type="number" id="qp-output" step="0.01" min="0" placeholder="如 15.00">
+        </div>
+        <div>
+          <label style="font-size:12px;color:var(--text-2);font-weight:600;display:block;margin-bottom:5px">缓存写入</label>
+          <input type="number" id="qp-cw" step="0.001" min="0" placeholder="如 3.75">
+        </div>
+        <div>
+          <label style="font-size:12px;color:var(--text-2);font-weight:600;display:block;margin-bottom:5px">缓存读取</label>
+          <input type="number" id="qp-cr" step="0.001" min="0" placeholder="如 0.30">
+        </div>
+      </div>
+      </div><!-- /qp-token-fields -->
+
+      <!-- 按次调用字段 -->
+      <div id="qp-call-fields" style="display:none">
+        <p style="font-size:12px;color:var(--text-3);margin-bottom:10px">
+          每次 API 调用的固定费用（美元/次）。
+        </p>
+        <div>
+          <label style="font-size:12px;color:var(--text-2);font-weight:600;display:block;margin-bottom:5px">每次调用价格（$）</label>
+          <input type="number" id="qp-per-call" step="0.0001" min="0" placeholder="如 0.0100">
+        </div>
+      </div>
+
+      <div id="qp-error" style="margin-top:10px;font-size:12px;color:var(--danger);display:none"></div>
+    </div>
+    <div style="padding:12px 20px 16px;display:flex;gap:10px;justify-content:flex-end">
+      <button class="btn btn-ghost" onclick="closeQuickPrice()">取消</button>
+      <button class="btn btn-primary" id="qp-save-btn" onclick="saveQuickPrice()">⚡ 保存价格</button>
+    </div>
+  </div>
+</div>
+
+<script>
+var _qpUpstream = '', _qpModel = '';
+
+var _qpType = 'token';
+function qpSetType(t) {
+  _qpType = t;
+  var isToken = (t === 'token');
+  document.getElementById('qp-token-fields').style.display = isToken ? '' : 'none';
+  document.getElementById('qp-call-fields').style.display  = isToken ? 'none' : '';
+  document.getElementById('qp-type-token').style.background = isToken ? 'var(--accent)' : 'var(--bg-3)';
+  document.getElementById('qp-type-token').style.color      = isToken ? '#fff' : 'var(--text-2)';
+  document.getElementById('qp-type-call').style.background  = isToken ? 'var(--bg-3)' : 'var(--accent)';
+  document.getElementById('qp-type-call').style.color       = isToken ? 'var(--text-2)' : '#fff';
+}
+function openQuickPrice(btn) {
+  _qpUpstream = btn.dataset.upstream || '';
+  _qpModel    = btn.dataset.model    || '';
+  document.getElementById('qp-title').textContent =
+    (_qpUpstream ? _qpUpstream + '  ·  ' : '') + _qpModel;
+  ['qp-input','qp-output','qp-cw','qp-cr'].forEach(function(id) {
+    document.getElementById(id).value = '';
+  });
+  document.getElementById('qp-per-call').value = '';
+  document.getElementById('qp-error').style.display = 'none';
+  qpSetType('token');
+  document.getElementById('quick-price-modal').style.display = 'flex';
+  document.getElementById('qp-input').focus();
+}
+
+function closeQuickPrice() {
+  document.getElementById('quick-price-modal').style.display = 'none';
+}
+
+// 点弹窗外关闭
+document.getElementById('quick-price-modal').addEventListener('click', function(e) {
+  if (e.target === this) closeQuickPrice();
+});
+
+async function saveQuickPrice() {
+  var btn = document.getElementById('qp-save-btn');
+  var err = document.getElementById('qp-error');
+  err.style.display = 'none';
+  var inp = parseFloat(document.getElementById('qp-input').value  || 0);
+  var out = parseFloat(document.getElementById('qp-output').value || 0);
+  var cw  = parseFloat(document.getElementById('qp-cw').value     || 0);
+  var cr  = parseFloat(document.getElementById('qp-cr').value     || 0);
+  var ppc = parseFloat(document.getElementById('qp-per-call').value || 0);
+  btn.disabled = true;
+  btn.textContent = '保存中…';
+  try {
+    var resp = await fetch('{{ admin_base }}/quick-price', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        upstream: _qpUpstream, model: _qpModel,
+        price_type: _qpType, price_per_call: ppc,
+        input: inp, output: out, cache_write: cw, cache_read: cr,
+      }),
+    });
+    var data = await resp.json();
+    if (data.ok) {
+      closeQuickPrice();
+      // 把对应行的按钮换成"✓ 已定价"，并去掉⚠️
+      document.querySelectorAll('.quick-price-btn').forEach(function(b) {
+        if (b.dataset.upstream === _qpUpstream && b.dataset.model === _qpModel) {
+          b.closest('td').innerHTML = '<span style="font-size:11px;color:var(--success)">✓ 已定价</span>';
+        }
+      });
+      // 更新横幅计数
+      var remaining = document.querySelectorAll('.quick-price-btn').length;
+      if (remaining === 0) {
+        var banner = document.querySelector('[style*="rgba(212,160,58,.1)"]');
+        if (banner) banner.remove();
+      }
+    } else {
+      err.textContent = '保存失败：' + (data.error || '未知错误');
+      err.style.display = 'block';
+    }
+  } catch(e) {
+    err.textContent = '请求失败：' + e.message;
+    err.style.display = 'block';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '⚡ 保存价格';
+  }
+}
+
+
+// 快速定价一键计算
+function autoFillQuickPrices() {
+  const inputEl = document.getElementById('qp-input');
+  const outputEl = document.getElementById('qp-output');
+  const cwEl = document.getElementById('qp-cw');
+  const crEl = document.getElementById('qp-cr');
+  
+  if (!inputEl || !outputEl || !cwEl || !crEl) return;
+  
+  const inputPrice = parseFloat(inputEl.value) || 0;
+  if (inputPrice <= 0) {
+    alert('请先填写输入价格');
+    inputEl.focus();
+    return;
+  }
+  
+  // 倍率：输出 = 5x，缓存写 = 1.25x，缓存读 = 0.1x
+  outputEl.value = (inputPrice * 5).toFixed(2);
+  cwEl.value = (inputPrice * 1.25).toFixed(3);
+  crEl.value = (inputPrice * 0.1).toFixed(3);
+  
+  // 高亮提示
+  [outputEl, cwEl, crEl].forEach(el => {
+    el.style.background = 'rgba(34,197,94,0.15)';
+    el.style.transition = 'background 0.3s';
+  });
+  
+  setTimeout(() => {
+    [outputEl, cwEl, crEl].forEach(el => {
+      el.style.background = '';
+    });
+  }, 1000);
+}
+
+// 每日明细：点击日期行展开/收起当天各模型费用明细
+document.querySelectorAll('tr[data-day-row]').forEach(tr => {
+  tr.addEventListener('click', () => {
+    const sub = document.getElementById('day-models-' + tr.dataset.dayRow);
+    if (sub) sub.style.display = (sub.style.display === 'none') ? '' : 'none';
+  });
+});
+
+</script>
+{% endblock %}

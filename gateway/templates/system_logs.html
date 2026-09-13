@@ -1,0 +1,201 @@
+{% extends "base.html" %}
+{% block title %}系统日志{% endblock %}
+{% block page_title %}系统日志{% endblock %}
+{% block page_sub %}网关运行日志（共 {{ total_lines }} 行，显示最后 {{ n }} 行）{% endblock %}
+
+{% block content %}
+
+<!-- 工具栏 -->
+<div class="card" style="padding:12px 16px;margin-bottom:12px">
+  <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+
+    <!-- 搜索 -->
+    <input type="search" id="log-search" placeholder="搜索关键词…"
+           style="flex:1;min-width:180px;max-width:360px"
+           oninput="applyFilters()">
+
+    <!-- 级别过滤 -->
+    <div style="display:flex;gap:4px;flex-wrap:wrap" id="level-btns">
+      <button class="log-level-btn active" data-level="ALL"    onclick="setLevel('ALL')">全部</button>
+      <button class="log-level-btn" data-level="ERROR"  onclick="setLevel('ERROR')"  style="color:#e07060">ERROR</button>
+      <button class="log-level-btn" data-level="WARNING" onclick="setLevel('WARNING')" style="color:#d4a03a">WARN</button>
+      <button class="log-level-btn" data-level="INFO"   onclick="setLevel('INFO')"   style="color:var(--accent-light)">INFO</button>
+      <button class="log-level-btn" data-level="DEBUG"  onclick="setLevel('DEBUG')"  style="color:var(--text-3)">DEBUG</button>
+    </div>
+
+    <!-- 行数选择 -->
+    <select id="line-count" onchange="changeLines(this.value)"
+            style="width:auto;flex:0 0 auto">
+      <option value="200"  {% if n==200  %}selected{% endif %}>200 行</option>
+      <option value="500"  {% if n==500  %}selected{% endif %}>500 行</option>
+      <option value="1000" {% if n==1000 %}selected{% endif %}>1000 行</option>
+      <option value="2000" {% if n==2000 %}selected{% endif %}>2000 行</option>
+      <option value="5000" {% if n==5000 %}selected{% endif %}>5000 行</option>
+    </select>
+
+    <!-- 统计 -->
+    <div id="log-stats" style="font-size:12px;color:var(--text-3);margin-left:auto;white-space:nowrap"></div>
+
+    <!-- 操作按钮 -->
+    <button class="btn btn-ghost btn-sm" onclick="scrollToBottom()">⬇ 跳底部</button>
+    <button class="btn btn-ghost btn-sm" onclick="location.reload()">🔄 刷新</button>
+    <label style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--text-2);cursor:pointer">
+      <input type="checkbox" id="auto-reload" onchange="toggleAutoReload(this.checked)"
+             style="width:14px;height:14px">
+      自动刷新
+    </label>
+  </div>
+</div>
+
+<!-- 日志容器 -->
+<div class="card" style="padding:0;overflow:hidden">
+  <div id="log-box" style="
+    background:var(--bg);
+    font-family:var(--font-mono);
+    font-size:12px;
+    line-height:1.75;
+    padding:12px 16px;
+    overflow-x:auto;
+    max-height:72vh;
+    overflow-y:auto;
+  ">
+    {% if lines %}
+      {% for line in lines %}
+        {%- if 'ERROR' in line -%}
+          <div class="log-line log-error" data-level="ERROR">{{ line }}</div>
+        {%- elif 'WARNING' in line or 'WARN' in line -%}
+          <div class="log-line log-warn" data-level="WARNING">{{ line }}</div>
+        {%- elif 'DEBUG' in line -%}
+          <div class="log-line log-debug" data-level="DEBUG">{{ line }}</div>
+        {%- elif 'INFO' in line -%}
+          <div class="log-line log-info" data-level="INFO">{{ line }}</div>
+        {%- else -%}
+          <div class="log-line log-other" data-level="OTHER">{{ line }}</div>
+        {%- endif -%}
+      {% endfor %}
+    {% else %}
+      <div style="color:var(--text-3);text-align:center;padding:48px">暂无日志</div>
+    {% endif %}
+  </div>
+</div>
+
+<style>
+/* 日志行 */
+.log-line {
+  white-space: pre-wrap;
+  word-break: break-all;
+  padding: 1px 4px;
+  border-radius: 3px;
+  color: var(--text-2);
+  transition: background 0.1s;
+}
+.log-line:hover { background: var(--accent-dim); }
+.log-error  { color: #e07060; }
+.log-warn   { color: #d4a03a; }
+.log-info   { color: var(--text-2); }
+.log-debug  { color: var(--text-3); font-size: 11px; }
+.log-other  { color: var(--text-3); }
+.log-line.hidden { display: none; }
+
+/* 级别过滤按钮 */
+.log-level-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  font-family: var(--font-mono);
+  cursor: pointer;
+  color: var(--text-2);
+  transition: background 0.15s, border-color 0.15s;
+  letter-spacing: 0.04em;
+}
+.log-level-btn:hover { background: var(--bg-3); }
+.log-level-btn.active {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* 搜索高亮 */
+.log-highlight {
+  background: rgba(212, 160, 58, 0.35);
+  color: inherit;
+  border-radius: 2px;
+  padding: 0 1px;
+}
+</style>
+
+<script>
+var currentLevel = 'ALL';
+var autoReloadTimer = null;
+
+function applyFilters() {
+  var kw = (document.getElementById('log-search').value || '').toLowerCase();
+  var lines = document.querySelectorAll('.log-line');
+  var total = lines.length, shown = 0;
+  var errCnt = 0, warnCnt = 0;
+
+  lines.forEach(function(el) {
+    var level = el.dataset.level || 'OTHER';
+    var text = el.textContent.toLowerCase();
+    var levelOk = currentLevel === 'ALL' || level === currentLevel;
+    var kwOk = !kw || text.includes(kw);
+    var visible = levelOk && kwOk;
+    el.classList.toggle('hidden', !visible);
+    if (visible) {
+      shown++;
+      if (level === 'ERROR') errCnt++;
+      if (level === 'WARNING') warnCnt++;
+      // 高亮搜索词
+      if (kw) {
+        el.innerHTML = el.textContent.replace(
+          new RegExp('(' + kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')', 'gi'),
+          '<mark class="log-highlight">$1</mark>'
+        );
+      } else {
+        // 还原高亮
+        el.innerHTML = el.textContent;
+      }
+    }
+  });
+
+  var stats = '显示 ' + shown + ' / ' + total + ' 行';
+  if (errCnt) stats += '  🔴 ' + errCnt + ' 错误';
+  if (warnCnt) stats += '  🟡 ' + warnCnt + ' 警告';
+  document.getElementById('log-stats').textContent = stats;
+}
+
+function setLevel(level) {
+  currentLevel = level;
+  document.querySelectorAll('.log-level-btn').forEach(function(btn) {
+    btn.classList.toggle('active', btn.dataset.level === level);
+  });
+  applyFilters();
+}
+
+function changeLines(n) {
+  var url = new URL(location.href);
+  url.searchParams.set('n', n);
+  location.href = url.toString();
+}
+
+function scrollToBottom() {
+  var box = document.getElementById('log-box');
+  box.scrollTop = box.scrollHeight;
+}
+
+function toggleAutoReload(on) {
+  if (autoReloadTimer) { clearInterval(autoReloadTimer); autoReloadTimer = null; }
+  if (on) autoReloadTimer = setInterval(function() { location.reload(); }, 5000);
+}
+
+// 初始化
+document.addEventListener('DOMContentLoaded', function() {
+  applyFilters();     // 计算初始统计
+  scrollToBottom();   // 跳到底部
+});
+</script>
+
+{% endblock %}

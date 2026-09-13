@@ -1,0 +1,52 @@
+# ===== 敏感数据，绝对不能入 git =====
+.env
+.env.local
+
+# 运行时数据库与配置（含 API key、对话历史、订阅信息）
+# 注意：用 data/* 不能用 data/，否则 ! 例外不生效（git 不会扫描整个被 ignore 的目录）
+data/*
+!data/.gitkeep
+!data/*.example.json
+
+# Python venv
+venv/
+env/
+.venv/
+
+# Python 缓存
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.pytest_cache/
+
+# 备份与日志
+*.bak
+*.bak-*
+*.backup
+*.old
+*.log
+logs/
+
+# IDE / OS
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# 本地临时文件
+_temp/
+_archive/
+local_backup*/
+tmp/
+*.tar.gz
+
+# Web Push
+data/vapid_keys.json
+data/push_subscriptions.json
+
+# 本地部署配置（含服务器地址，见 scripts/deploy.sh）
+scripts/deploy.local

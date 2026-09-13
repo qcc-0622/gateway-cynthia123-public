@@ -1,0 +1,497 @@
+{% extends "base.html" %}
+{% block title %}上游管理
+<script>
+/* ===== 一键拉取全部上游模型 ===== */
+async function refreshAllUpstreams(btn) {
+  const status = document.getElementById('refresh-all-status');
+  const origText = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '⏳ 拉取中…';
+  status.textContent = '';
+  status.style.color = 'var(--text-2)';
+  try {
+    const resp = await fetch('{{ admin_base }}/upstreams/refresh-all-models', { method: 'POST' });
+    const data = await resp.json();
+    const lines = Object.entries(data).map(([name, r]) =>
+      r.ok ? `✅ ${name}（${r.count} 个）` : `❌ ${name}`
+    );
+    status.innerHTML = lines.join('&nbsp;&nbsp;');
+    status.style.color = 'var(--success)';
+    // 更新每个上游的模型数量显示
+    Object.entries(data).forEach(([name, r]) => {
+      const counter = document.getElementById('model-count-' + name);
+      if (counter && r.ok) {
+        counter.textContent = '共 ' + r.count + ' 个模型（已更新）';
+      }
+    });
+    // 记录刷新时间
+    const now = new Date().toLocaleString('zh-CN');
+    localStorage.setItem('upstream-last-refresh', now);
+    const lastEl = document.getElementById('last-refresh-time');
+    if (lastEl) lastEl.textContent = '上次刷新：' + now;
+  } catch (e) {
+    status.textContent = '❌ 拉取失败：' + e.message;
+    status.style.color = 'var(--danger)';
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = origText;
+  }
+}
+
+/* ===== 自动刷新设置 ===== */
+function toggleAutoRefresh(enabled) {
+  localStorage.setItem('upstream-auto-refresh', enabled ? '1' : '0');
+}
+
+(function initRefreshUI() {
+  // 显示上次刷新时间
+  const last = localStorage.getItem('upstream-last-refresh');
+  const lastEl = document.getElementById('last-refresh-time');
+  if (last && lastEl) lastEl.textContent = '上次刷新：' + last;
+
+  // 恢复自动刷新开关
+  const autoEl = document.getElementById('auto-refresh-toggle');
+  const autoOn = localStorage.getItem('upstream-auto-refresh') === '1';
+  if (autoEl) autoEl.checked = autoOn;
+
+  // 如果开启了自动刷新，进入页面就拉
+  if (autoOn) {
+    const btn = document.getElementById('btn-refresh-all');
+    const status = document.getElementById('refresh-all-status');
+    if (btn && status) {
+      status.textContent = '自动刷新中…';
+      status.style.color = 'var(--text-3)';
+      refreshAllUpstreams(btn);
+    }
+  }
+})();
+</script>
+{% endblock %}
+{% block page_title %}上游管理{% endblock %}
+{% block page_sub %}配置 API 中转站{% endblock %}
+
+{% block content %}
+{% if error %}
+<div class="alert alert-error">⚠️ {{ error }}</div>
+{% endif %}
+{% if success %}
+<div class="alert alert-success">✅ {{ success }}</div>
+{% endif %}
+
+<p style="font-size:13px;color:var(--text-3);margin-bottom:16px">
+  第一个<strong style="color:var(--text)">启用</strong>的上游用于转发所有请求。点击「拉取模型」可从上游获取可用模型列表。
+</p>
+
+<!-- 一键拉取全部 + 自动刷新 -->
+<div class="card" style="margin-bottom:16px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:14px 16px">
+  <button class="btn btn-primary" id="btn-refresh-all" onclick="refreshAllUpstreams(this)">
+    🔄 一键拉取全部上游模型
+  </button>
+  <span id="refresh-all-status" style="font-size:13px;color:var(--text-2)"></span>
+  <div style="margin-left:auto;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+    <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--text-2);cursor:pointer">
+      <input type="checkbox" id="auto-refresh-toggle"
+             onchange="toggleAutoRefresh(this.checked)"
+             style="width:16px;height:16px">
+      进入页面自动拉取
+    </label>
+    <span id="last-refresh-time" style="font-size:11px;color:var(--text-3)"></span>
+  </div>
+</div>
+
+{% if upstreams %}
+{% for u in upstreams %}
+<div class="card" style="margin-bottom:14px" id="card-{{ u.name }}">
+  <div class="upstream-card-flex" style="display:flex;align-items:flex-start;gap:12px;flex-wrap:wrap">
+    <!-- 左：信息 -->
+    <div style="flex:1;min-width:0">
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px">
+        <strong style="font-size:14px">{{ u.name }}</strong>
+        {% if u.is_active %}
+          <span class="tag tag-active">启用</span>
+        {% else %}
+          <span class="tag tag-inactive">禁用</span>
+        {% endif %}
+        <span class="tag tag-{{ u.api_format }}">{{ u.api_format }}</span>
+        <span class="tag" id="cache-tag-{{ u.name }}" style="background:rgba(46,160,67,.14);color:var(--success)">
+          缓存 {{ u.cache_ttl or '1h' }}
+        </span>
+      </div>
+      <div style="font-size:12px;color:var(--text-3);margin-bottom:8px;word-break:break-all">
+        {{ u.base_url }}
+      </div>
+
+      <!-- 默认模型 -->
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <span style="font-size:12px;color:var(--text-2)">默认模型：</span>
+        {% if u.default_model %}
+          <code style="font-size:12px;color:var(--accent-light)">{{ u.default_model }}</code>
+        {% else %}
+          <span style="font-size:12px;color:var(--text-3)">未设置（跟随请求）</span>
+        {% endif %}
+
+        <!-- 拉取模型按钮 -->
+        <button class="btn btn-ghost btn-sm" onclick="fetchModels('{{ u.name }}')" id="btn-{{ u.name }}">
+          🔄 拉取模型
+        </button>
+      </div>
+
+      <!-- 额外令牌管理 -->
+      {% if u.extra_keys %}
+      <div style="margin-top:10px;padding:8px 10px;background:var(--bg-3);border-radius:var(--radius);font-size:12px">
+        <div style="color:var(--text-3);margin-bottom:6px;font-size:11px;font-weight:600">额外令牌</div>
+        {% for k in u.extra_keys %}
+        <details style="border-top:1px solid var(--border);padding-top:6px;margin-top:6px">
+          <summary style="cursor:pointer;list-style:none;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+            <span class="tag" style="background:rgba(124,106,247,.15);color:var(--accent-light)">{{ k.purpose }}</span>
+            <span style="color:var(--text-2)">{{ k.label or ('令牌 ' ~ loop.index) }}</span>
+            <code style="color:var(--text-3);font-size:11px">{{ k.key[:8] }}...{{ k.key[-4:] }}</code>
+            {% if k.model_prefixes %}
+              <span style="color:var(--text-3)">前缀 {{ k.model_prefixes | join(', ') }}</span>
+            {% endif %}
+            {% if k.models %}
+              <span style="color:var(--text-3)">固定 {{ k.models | length }} 个</span>
+            {% endif %}
+            {% if k.cached_models %}
+              <span style="color:var(--text-3)">已拉取 {{ k.cached_models | length }} 个</span>
+            {% endif %}
+          </summary>
+          <form method="post" action="{{ admin_base }}/upstreams/{{ u.name }}/update-key/{{ loop.index0 }}"
+                style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:6px;margin-top:8px;align-items:end">
+            <input name="label" placeholder="分组名"
+                   value="{{ k.label or '' }}" style="font-size:12px">
+            <select name="purpose" style="font-size:12px">
+              <option value="chat" {% if k.purpose == 'chat' %}selected{% endif %}>chat</option>
+              <option value="summary" {% if k.purpose == 'summary' %}selected{% endif %}>summary</option>
+              <option value="all" {% if k.purpose == 'all' %}selected{% endif %}>all</option>
+            </select>
+            <input name="model_prefixes" placeholder="模型前缀，如 gemini,models/gemini"
+                   value="{{ (k.model_prefixes or []) | join(',') }}" style="font-size:12px">
+            <input name="models" placeholder="固定模型，逗号分隔"
+                   value="{{ (k.models or []) | join(',') }}" style="font-size:12px">
+            <select name="cache_ttl" style="font-size:12px">
+              <option value="" {% if not k.cache_ttl %}selected{% endif %}>缓存继承上游</option>
+              <option value="1h" {% if k.cache_ttl == '1h' %}selected{% endif %}>缓存 1h</option>
+              <option value="5m" {% if k.cache_ttl == '5m' %}selected{% endif %}>缓存 5m</option>
+              <option value="off" {% if k.cache_ttl == 'off' %}selected{% endif %}>缓存关闭</option>
+            </select>
+            <div style="display:flex;gap:6px">
+              <button type="submit" class="btn btn-primary btn-sm">保存分组</button>
+              <button type="submit" class="btn btn-ghost btn-sm" style="color:var(--danger)"
+                      form="delete-key-{{ u.name }}-{{ loop.index0 }}">删除</button>
+            </div>
+          </form>
+          <form id="delete-key-{{ u.name }}-{{ loop.index0 }}" method="post"
+                action="{{ admin_base }}/upstreams/{{ u.name }}/delete-key/{{ loop.index0 }}"
+                onsubmit="return confirm('删除该令牌？')" style="display:none"></form>
+        </details>
+        {% endfor %}
+      </div>
+      {% endif %}
+      <!-- 添加令牌 -->
+      <details style="margin-top:8px">
+        <summary style="font-size:11px;color:var(--text-3);cursor:pointer;user-select:none">＋ 添加额外令牌</summary>
+        <form method="post" action="{{ admin_base }}/upstreams/{{ u.name }}/add-key"
+              style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px;align-items:center">
+          <input name="key" placeholder="API Key" required
+                 style="flex:2;min-width:160px;font-size:12px">
+          <input name="label" placeholder="备注（可选）"
+                 style="flex:1;min-width:100px;font-size:12px">
+          <select name="purpose" style="font-size:12px;min-width:90px">
+            <option value="chat">chat</option>
+            <option value="summary">summary</option>
+            <option value="all">all</option>
+          </select>
+          <input name="model_prefixes" placeholder="模型前缀，如 gemini"
+                 style="flex:1;min-width:140px;font-size:12px">
+          <input name="models" placeholder="固定模型，逗号分隔"
+                 style="flex:1;min-width:140px;font-size:12px">
+          <select name="cache_ttl" style="font-size:12px;min-width:110px">
+            <option value="">缓存继承上游</option>
+            <option value="1h">缓存 1h</option>
+            <option value="5m">缓存 5m</option>
+            <option value="off">缓存关闭</option>
+          </select>
+          <button type="submit" class="btn btn-primary btn-sm">添加</button>
+        </form>
+      </details>
+
+            <!-- 模型选择区（拉取后显示） -->
+      <div id="models-{{ u.name }}" style="display:none;margin-top:12px">
+        <form method="post" action="{{ admin_base }}/upstreams/{{ u.name }}/set-model"
+              style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <select name="model" id="select-{{ u.name }}"
+                  style="flex:1;min-width:200px;max-width:420px">
+            <option value="">— 不指定（跟随请求）—</option>
+            {% for m in u.cached_models %}
+            <option value="{{ m }}" {% if m == u.default_model %}selected{% endif %}>{{ m }}</option>
+            {% endfor %}
+          </select>
+          <button type="submit" class="btn btn-primary btn-sm">保存</button>
+        </form>
+        <div id="model-count-{{ u.name }}" style="font-size:11px;color:var(--text-3);margin-top:4px"></div>
+        <div id="model-groups-{{ u.name }}" style="margin-top:8px;display:grid;gap:6px"></div>
+      </div>
+    </div>
+
+    <!-- 右：操作 -->
+    <div class="upstream-actions" style="display:flex;gap:6px;flex-shrink:0;align-items:flex-start;flex-wrap:wrap">
+      <button class="btn btn-ghost btn-sm think-toggle-btn"
+              data-name="{{ u.name }}"
+              data-active="{{ u.force_think | lower }}"
+              data-tag="{{ u.think_tag | e }}"
+              onclick="toggleThink(this)"
+              title="开启后在每次发请求前注入 &lt;think&gt; 标签，引导模型进行推理"
+              style="{% if u.force_think %}border-color:var(--accent);color:var(--accent);{% endif %}">
+        🧠 {% if u.force_think %}思考中{% else %}引导思考{% endif %}
+      </button>
+      <button class="btn btn-ghost btn-sm cache-ttl-btn"
+              id="cache-btn-{{ u.name }}"
+              data-name="{{ u.name }}"
+              data-ttl="{{ u.cache_ttl or '1h' }}"
+              onclick="toggleCacheTtl(this)"
+              title="切换该上游默认缓存 TTL；额外令牌分组可以单独覆盖">
+        缓存 {{ u.cache_ttl or '1h' }}
+      </button>
+      <form method="post" action="{{ admin_base }}/upstreams/{{ u.name }}/toggle">
+        <button type="submit" class="btn btn-ghost btn-sm">
+          {% if u.is_active %}禁用{% else %}启用{% endif %}
+        </button>
+      </form>
+      <form method="post" action="{{ admin_base }}/upstreams/{{ u.name }}/delete"
+            onsubmit="return confirm('确定删除上游「{{ u.name }}」吗？')">
+        <button type="submit" class="btn btn-danger btn-sm">删除</button>
+      </form>
+    </div>
+  </div>
+</div>
+{% endfor %}
+{% else %}
+<div class="card" style="text-align:center;padding:48px;color:var(--text-3)">
+  <div style="font-size:32px;margin-bottom:10px">🔌</div>
+  <div>还没有配置任何上游，请在下方添加</div>
+</div>
+{% endif %}
+
+<hr>
+<div class="card">
+  <div class="card-title">添加上游</div>
+  <form method="post" action="{{ admin_base }}/upstreams/add">
+    <div class="form-grid">
+      <div class="form-group">
+        <label class="form-label">名称（随意起，用于识别）</label>
+        <input type="text" name="name" placeholder="例：55中转" required>
+      </div>
+      <div class="form-group">
+        <label class="form-label">API 地址</label>
+        <input type="url" name="base_url" placeholder="https://api.relay-a.example.com" required>
+      </div>
+    </div>
+    <div class="form-grid">
+      <div class="form-group">
+        <label class="form-label">API Key</label>
+        <input type="text" name="api_key" placeholder="sk-…" required>
+      </div>
+      <div class="form-group">
+        <label class="form-label">格式（不确定选 Anthropic）</label>
+        <select name="api_format">
+          <option value="anthropic">Anthropic（Claude 原生）</option>
+          <option value="openai">OpenAI 兼容格式</option>
+        </select>
+      </div>
+    </div>
+    <button type="submit" class="btn btn-primary">添加上游</button>
+  </form>
+</div>
+
+<script>
+async function fetchModels(name) {
+  const btn = document.getElementById('btn-' + name);
+  const area = document.getElementById('models-' + name);
+  const sel = document.getElementById('select-' + name);
+  const counter = document.getElementById('model-count-' + name);
+  const groupBox = document.getElementById('model-groups-' + name);
+
+  btn.textContent = '⏳ 拉取中…';
+  btn.disabled = true;
+
+  try {
+    const res = await fetch('{{ admin_base }}/upstreams/' + encodeURIComponent(name) + '/models');
+    const data = await res.json();
+
+    if (data.error) {
+      alert('拉取失败：' + data.error);
+      btn.textContent = '🔄 拉取模型';
+      btn.disabled = false;
+      return;
+    }
+
+    const models = data.models || [];
+    // 重建 select 选项
+    const currentVal = sel.value;
+    // 保留第一个「不指定」选项
+    while (sel.options.length > 1) sel.remove(1);
+    models.forEach(m => {
+      const opt = document.createElement('option');
+      opt.value = m; opt.textContent = m;
+      if (m === currentVal) opt.selected = true;
+      sel.appendChild(opt);
+    });
+
+    counter.textContent = `共 ${models.length} 个模型`;
+    renderModelGroups(groupBox, data.groups || []);
+    area.style.display = 'block';
+    btn.textContent = '✅ 已拉取';
+    btn.disabled = false;
+  } catch (e) {
+    alert('网络错误：' + e.message);
+    btn.textContent = '🔄 拉取模型';
+    btn.disabled = false;
+  }
+}
+
+function renderModelGroups(container, groups) {
+  if (!container) return;
+  container.innerHTML = '';
+  if (!groups.length) return;
+  groups.forEach(g => {
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--bg-3);font-size:11px';
+    const title = document.createElement('div');
+    title.style.cssText = 'display:flex;gap:6px;align-items:center;flex-wrap:wrap;color:var(--text-2);margin-bottom:3px';
+    title.textContent = `${g.label || '令牌分组'} · ${g.purpose || 'chat'} · ${g.count || 0} 个模型`;
+    wrap.appendChild(title);
+    const preview = document.createElement('div');
+    preview.style.cssText = 'color:var(--text-3);word-break:break-all';
+    const models = g.models || [];
+    preview.textContent = models.slice(0, 8).join(', ') + (models.length > 8 ? ' ...' : '');
+    wrap.appendChild(preview);
+    container.appendChild(wrap);
+  });
+}
+
+// 如果已有缓存模型，自动展开选择区
+document.addEventListener('DOMContentLoaded', () => {
+  {% for u in upstreams %}
+  {% if u.cached_models %}
+  document.getElementById('models-{{ u.name }}').style.display = 'block';
+  document.getElementById('model-count-{{ u.name }}').textContent = '共 {{ u.cached_models | length }} 个模型（已缓存）';
+  renderModelGroups(document.getElementById('model-groups-{{ u.name }}'), [
+    {
+      label: '主令牌',
+      purpose: 'chat',
+      count: {{ (u.primary_cached_models or u.cached_models or []) | length }},
+      models: {{ (u.primary_cached_models or u.cached_models or []) | tojson }}
+    }
+    {% for k in u.extra_keys %}
+    ,{
+      label: {{ (k.label or ('令牌 ' ~ loop.index)) | tojson }},
+      purpose: {{ (k.purpose or 'chat') | tojson }},
+      count: {{ (k.cached_models or []) | length }},
+      models: {{ (k.cached_models or []) | tojson }}
+    }
+    {% endfor %}
+  ]);
+  {% endif %}
+  {% endfor %}
+});
+</script>
+
+<script>
+/* ===== 缓存 TTL 开关 ===== */
+function cacheTtlLabel(ttl) {
+  if (ttl === 'off') return '缓存关闭';
+  return '缓存 ' + (ttl || '1h');
+}
+
+function nextCacheTtl(ttl) {
+  if (ttl === '1h') return '5m';
+  if (ttl === '5m') return 'off';
+  return '1h';
+}
+
+async function toggleCacheTtl(btn) {
+  const name = btn.dataset.name;
+  const ttl = nextCacheTtl(btn.dataset.ttl || '1h');
+  const origText = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '保存中…';
+  try {
+    const resp = await fetch(
+      window.__ADMIN_BASE__ + '/upstreams/' + encodeURIComponent(name) + '/cache-ttl',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cache_ttl: ttl }),
+      }
+    );
+    const data = await resp.json();
+    if (!data.ok) {
+      alert('操作失败：' + (data.error || '未知错误'));
+      btn.textContent = origText;
+      return;
+    }
+    btn.dataset.ttl = data.cache_ttl || '1h';
+    btn.textContent = cacheTtlLabel(btn.dataset.ttl);
+    const tag = document.getElementById('cache-tag-' + name);
+    if (tag) tag.textContent = cacheTtlLabel(btn.dataset.ttl);
+  } catch (e) {
+    alert('请求失败：' + e.message);
+    btn.textContent = origText;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+/* ===== 引导思考开关 ===== */
+async function toggleThink(btn) {
+  const name = btn.dataset.name;
+  const cur = btn.dataset.active === 'true';
+  const newState = !cur;
+
+  let tag = btn.dataset.tag || '<think>\n';
+  if (newState) {
+    const input = prompt(
+      '输入思考前缀（直接回车用默认）：\n• <think>\n — 通用 QwQ / DeepSeek-R1\n• <thinking>\n — 部分模型',
+      tag
+    );
+    if (input === null) return;
+    tag = input || '<think>\n';
+  }
+
+  btn.disabled = true;
+  const origText = btn.textContent;
+  btn.textContent = '⏳';
+
+  try {
+    const resp = await fetch(
+      window.__ADMIN_BASE__ + '/upstreams/' + encodeURIComponent(name) + '/toggle-think',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ force_think: newState, think_tag: tag }),
+      }
+    );
+    const data = await resp.json();
+    if (data.ok) {
+      btn.dataset.active = data.force_think ? 'true' : 'false';
+      btn.dataset.tag = data.think_tag || '<think>\n';
+      btn.textContent = data.force_think ? '🧠 思考中' : '🧠 引导思考';
+      btn.style.borderColor = data.force_think ? 'var(--accent)' : '';
+      btn.style.color = data.force_think ? 'var(--accent)' : '';
+    } else {
+      alert('操作失败：' + (data.error || '未知错误'));
+      btn.textContent = origText;
+    }
+  } catch(e) {
+    alert('请求失败：' + e.message);
+    btn.textContent = origText;
+  } finally {
+    btn.disabled = false;
+  }
+}
+// 把 admin_base 暴露给 JS（从 Jinja2 渲染一次）
+window.__ADMIN_BASE__ = '{{ admin_base }}';
+</script>
+
+{% endblock %}

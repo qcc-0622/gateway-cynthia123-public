@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}仪表盘{% endblock %}
+{% block page_title %}仪表盘{% endblock %}
+{% block page_sub %}运行状态概览{% endblock %}
+
+{% block content %}
+<div class="stat-grid">
+  <div class="stat-card">
+    <div class="num">{{ stats.total_conversations }}</div>
+    <div class="label">总对话数</div>
+  </div>
+  <div class="stat-card">
+    <div class="num">{{ stats.total_messages }}</div>
+    <div class="label">总消息数</div>
+  </div>
+  <div class="stat-card">
+    <div class="num">{{ stats.today_messages }}</div>
+    <div class="label">今日消息</div>
+  </div>
+  <div class="stat-card">
+    <div class="num">{{ (stats.total_tokens_in + stats.total_tokens_out) | int }}</div>
+    <div class="label">累计 Token</div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-title">当前上游</div>
+  {% if active_upstream %}
+  <div class="upstream-card" style="border:none;padding:0;margin:0;background:transparent;">
+    <div class="upstream-dot on"></div>
+    <div class="upstream-info">
+      <div class="upstream-name">
+        {{ active_upstream.name }}
+        <span class="tag tag-active" style="margin-left:6px">启用</span>
+        <span class="tag tag-{{ active_upstream.api_format }}" style="margin-left:4px">{{ active_upstream.api_format }}</span>
+      </div>
+      <div class="upstream-url">{{ active_upstream.base_url }}</div>
+    </div>
+    <a href="{{ admin_base }}/upstreams" class="btn btn-ghost btn-sm">管理</a>
+  </div>
+  <p style="font-size:12px;color:var(--text-3);margin-top:10px">共配置 {{ upstream_count }} 个上游</p>
+  {% else %}
+  <div style="display:flex;align-items:center;gap:10px;">
+    <div class="upstream-dot off"></div>
+    <span style="color:var(--text-3);font-size:13px">没有启用的上游，网关无法转发请求</span>
+    <a href="{{ admin_base }}/upstreams" class="btn btn-primary btn-sm" style="margin-left:auto">立即配置</a>
+  </div>
+  {% endif %}
+</div>
+
+<div class="section-title">快速导航</div>
+<div class="quick-nav">
+  <a href="{{ admin_base }}/logs" class="quick-btn">
+    <span class="qb-icon">📋</span>
+    <div>
+      <div>对话记录</div>
+      <div style="font-size:11px;color:var(--text-3);font-weight:400">查看所有存档对话</div>
+    </div>
+  </a>
+  <a href="{{ admin_base }}/upstreams" class="quick-btn">
+    <span class="qb-icon">⚙️</span>
+    <div>
+      <div>上游管理</div>
+      <div style="font-size:11px;color:var(--text-3);font-weight:400">添加/切换 API 中转站</div>
+    </div>
+  </a>
+</div>
+{% endblock %}

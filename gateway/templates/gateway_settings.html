@@ -1,0 +1,925 @@
+{% extends "base.html" %}
+{% block title %}网关设置{% endblock %}
+{% block page_title %}网关设置{% endblock %}
+{% block page_sub %}摘要模型、缓存策略等运行参数{% endblock %}
+
+{% block content %}
+{% if saved %}
+<div class="alert alert-success">✅ 设置已保存</div>
+{% endif %}
+
+<!-- Tab 切换条 -->
+<div class="sticky-tabs">
+  <button class="tab-btn active" data-tab="bp2">BP2 参数</button>
+  <button class="tab-btn" data-tab="memory">记忆召回</button>
+  <button class="tab-btn" data-tab="prices">价格表</button>
+  <button class="tab-btn" data-tab="notify">通知 &amp; 余额</button>
+</div>
+
+<form method="post" action="{{ admin_base }}/gateway-settings">
+
+  <!-- ===== Tab: BP2 参数 ===== -->
+  <div class="tab-panel active" data-panel="bp2">
+
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-title">BP2 摘要配置</div>
+
+      <div class="form-group">
+        <label class="form-label">摘要上游（留空则与对话用同一个）</label>
+        <select name="summary_upstream">
+          <option value="">— 与对话相同 —</option>
+          {% for u in upstreams %}
+          <option value="{{ u.name }}" {% if settings.summary_upstream == u.name %}selected{% endif %}>
+            {{ u.name }} · {{ u.base_url }} · {{ u.api_format }}
+            {% if not u.is_active %}（已禁用）{% endif %}
+          </option>
+          {% endfor %}
+        </select>
+        <small style="color:var(--text-3);font-size:11px;margin-top:4px;display:block">
+          可以指定另一个中转站专门做摘要，比如用便宜的国产模型降低成本。
+        </small>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">摘要模型</label>
+        <div style="display:flex;gap:8px;align-items:flex-start;flex-wrap:wrap">
+          <input type="text" name="summary_model" id="summary_model"
+                 value="{{ settings.summary_model }}"
+                 placeholder="留空则用 claude-haiku-4-5-20251001"
+                 style="flex:1;min-width:240px">
+          {% if all_models %}
+          <div style="position:relative">
+            <button type="button" class="btn btn-ghost" onclick="toggleModelPicker()">
+              从已拉取模型选择 ▾
+            </button>
+            <div id="model-picker" style="display:none;position:absolute;right:0;top:36px;
+                 background:var(--bg-2);border:1px solid var(--border);border-radius:var(--radius);
+                 padding:6px;min-width:280px;max-height:260px;overflow-y:auto;z-index:200;box-shadow:0 4px 16px rgba(0,0,0,.4)">
+              <input type="text" id="model-search" placeholder="搜索模型…"
+                     oninput="filterModels(this.value)"
+                     style="width:100%;margin-bottom:6px;font-size:12px">
+              {% for group in grouped_models %}
+              <div style="padding:3px 6px;font-size:10px;color:var(--text-3);font-weight:600;
+                   text-transform:uppercase;letter-spacing:.06em;margin-top:4px">
+                {{ group.name }}
+              </div>
+              {% for m in group.models %}
+              <div class="model-opt" onclick="selectModel('{{ m }}')"
+                   style="padding:4px 8px 4px 16px;border-radius:4px;cursor:pointer;font-size:12px;color:var(--text-2)">
+                {{ m }}
+              </div>
+              {% endfor %}
+              {% endfor %}
+            </div>
+          </div>
+          {% endif %}
+        </div>
+        <small style="color:var(--text-3);font-size:11px;margin-top:4px;display:block">
+          填你想用的模型名，用国产模型也行，只要上游支持就能用。留空走默认 haiku。
+        </small>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">摘要 Prompt（留空使用内置中文 prompt）</label>
+        <textarea name="summary_prompt" rows="4"
+                  placeholder="你是一个对话摘要助手。请将以下对话精炼成简洁的中文摘要（150-250字）……">{{ settings.summary_prompt }}</textarea>
+        <small style="color:var(--text-3);font-size:11px;margin-top:4px;display:block">
+          自定义时记得说清楚：输出语言、字数、需要保留哪些信息。
+        </small>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-title">缓存策略</div>
+      <p style="font-size:12px;color:var(--text-3);margin-bottom:12px">
+        固定 4 个缓存点：tools 1h、system 1h、frozen 末尾 1h、上一轮 assistant 5m。当前 user 与时间戳不缓存。
+      </p>
+
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px">
+        <div class="form-group">
+          <label class="form-label">Frozen 原文轮数</label>
+          <input type="number" name="bp3_frozen_rounds" min="1" max="32"
+                 value="{{ settings.bp3_frozen_rounds or 8 }}" style="width:100%">
+          <small style="color:var(--text-3);font-size:11px;margin-top:4px;display:block">
+            摘要之后保留的稳定原文轮数；默认 8。
+          </small>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Live 累积轮数</label>
+          <input type="number" name="bp3_live_rounds" min="1" max="64"
+                 value="{{ settings.bp3_live_rounds or 24 }}" style="width:100%">
+          <small style="color:var(--text-3);font-size:11px;margin-top:4px;display:block">
+            累积到多少轮后才重写摘要；默认 24。
+          </small>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Legacy cycle size</label>
+          <input type="number" name="bp3_cycle_size" min="3"
+                 value="{{ settings.bp3_cycle_size }}" style="width:100%">
+          <small style="color:var(--text-3);font-size:11px;margin-top:4px;display:block">
+            兼容旧数据和后台任务；新策略主要使用上面两项。
+          </small>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-title">🌐 统一大脑（实验功能）</div>
+      <p style="font-size:12px;color:var(--text-3);margin-bottom:12px">
+        所有平台的对话汇入同一条全局时间线 + 全局滚动摘要（fp_global），切平台无缝续聊。
+        <strong>默认关闭；关闭时网关行为与现状完全一致。</strong>出问题时关掉这个开关即可一键回退。
+      </p>
+
+      <div class="form-group">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+          <input type="checkbox" name="unified_brain_enabled" value="1"
+                 {% if settings.unified_brain_enabled %}checked{% endif %}>
+          <span class="form-label" style="margin:0">启用统一大脑</span>
+        </label>
+      </div>
+
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px">
+        <div class="form-group">
+          <label class="form-label">全局摘要间隔（条）</label>
+          <input type="number" name="unified_summary_interval" min="5" max="200"
+                 value="{{ settings.unified_summary_interval or 30 }}" style="width:100%">
+          <small style="color:var(--text-3);font-size:11px;margin-top:4px;display:block">
+            全局时间线每新增多少条消息，触发一次全局摘要滚动压缩；默认 30。
+          </small>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">时间线尾巴上限（条）</label>
+          <input type="number" name="unified_tail_max" min="10" max="300"
+                 value="{{ settings.unified_tail_max or 60 }}" style="width:100%">
+          <small style="color:var(--text-3);font-size:11px;margin-top:4px;display:block">
+            每次请求最多带多少条全局时间线原文（摘要位置之后的部分）；默认 60。
+          </small>
+        </div>
+      </div>
+    </div>
+
+    <button type="submit" class="btn btn-primary">保存设置</button>
+  </div>
+
+  <!-- ===== Tab: 记忆召回 ===== -->
+  <div class="tab-panel" data-panel="memory">
+
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-title">多上游 Failover（自动换站）</div>
+      <p style="font-size:12px;color:var(--text-3);margin-bottom:12px">
+        首选上游在开始回复前失败（限流 429 / 上游 5xx / key 失效 / 连接失败）时，
+        自动改用下一家能服务该模型的上游重试。开始回复后不再换站。
+      </p>
+      <div class="form-group">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+          <input type="checkbox" name="upstream_failover_enabled" {% if settings.upstream_failover_enabled %}checked{% endif %}>
+          <span>启用多上游 Failover</span>
+        </label>
+        <small style="color:var(--text-3);font-size:11px;margin-top:4px;display:block">
+          ⚠️ 默认关闭：换站会把请求发给备用上游、消耗其余额——请确认备用上游有钱再开。
+          显式用 upstream::模型名 点名的请求永不换站。
+        </small>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-title">记忆召回（ombre-brain 集成）</div>
+      <p style="font-size:12px;color:var(--text-3);margin-bottom:12px">
+        新话题时自动从 ombre 检索相关记忆并注入到上下文；BP2 摘要生成后自动喂记忆给 ombre。
+      </p>
+
+      <div class="form-group">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+          <input type="checkbox" name="memory_recall_enabled" {% if settings.memory_recall_enabled %}checked{% endif %}>
+          <span>启用「自动记忆召回」（Phase 1）</span>
+        </label>
+        <small style="color:var(--text-3);font-size:11px;margin-top:4px;display:block">
+          每次请求时，如果检测到新话题，调 ombre.breath + 随机注入，把相关记忆塞进上下文
+        </small>
+      </div>
+
+      <div class="form-group">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+          <input type="checkbox" name="memory_autofeed_enabled" {% if settings.memory_autofeed_enabled %}checked{% endif %}>
+          <span>启用「BP2 后自动喂记忆」（Phase 2）</span>
+        </label>
+        <small style="color:var(--text-3);font-size:11px;margin-top:4px;display:block">
+          每次 BP2 滚动摘要生成成功后，把新增对话异步喂给 ombre.hold（不阻塞主请求）
+        </small>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Ombre MCP URL</label>
+        <input type="text" name="ombre_url" value="{{ settings.ombre_url }}"
+               placeholder="http://127.0.0.1:18001/mcp">
+        <small style="color:var(--text-3);font-size:11px;margin-top:4px;display:block">
+          内网直连：http://127.0.0.1:18001/mcp（不用 token）。也可以走 Nginx：https://gateway.example.com/brain/mcp
+        </small>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Ombre Token（X-Brain-Token，内网调用留空）</label>
+        <input type="text" name="ombre_token" value="{{ settings.ombre_token }}" placeholder="">
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Ombre buckets 目录（用于随机注入直接读 .md）</label>
+        <input type="text" name="ombre_buckets_dir" value="{{ settings.ombre_buckets_dir }}"
+               placeholder="/opt/ombre-brain/buckets">
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Embedding 服务（用于新话题检测）</label>
+        <div style="display:grid;grid-template-columns:2fr 1fr;gap:8px;margin-bottom:6px">
+          <input type="text" name="embed_url" value="{{ settings.embed_url }}"
+                 placeholder="https://api.siliconflow.cn/v1/embeddings">
+          <input type="text" name="embed_model" value="{{ settings.embed_model }}"
+                 placeholder="BAAI/bge-m3">
+        </div>
+        <input type="text" name="embed_api_key" value="{{ settings.embed_api_key }}"
+               placeholder="Bearer API key（必填）">
+        <small style="color:var(--text-3);font-size:11px;margin-top:4px;display:block">
+          SiliconFlow 的 bge-m3 嵌入服务。ombre 自己也在用，可以共用同一个 key
+        </small>
+      </div>
+
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px">
+        <div class="form-group" style="margin-bottom:0">
+          <label class="form-label">新话题阈值（cosine）</label>
+          <input type="number" name="memory_new_topic_threshold"
+                 value="{{ settings.memory_new_topic_threshold }}"
+                 step="0.05" min="0" max="1">
+          <small style="font-size:10px;color:var(--text-3)">cosine 低于此值才触发</small>
+        </div>
+        <div class="form-group" style="margin-bottom:0">
+          <label class="form-label">最多注入几条</label>
+          <input type="number" name="memory_max_recall"
+                 value="{{ settings.memory_max_recall }}"
+                 min="1" max="10">
+        </div>
+        <div class="form-group" style="margin-bottom:0">
+          <label class="form-label">随机注入几条</label>
+          <input type="number" name="memory_random_k"
+                 value="{{ settings.memory_random_k }}"
+                 min="0" max="5">
+        </div>
+      </div>
+    </div>
+
+    <button type="submit" class="btn btn-primary">保存设置</button>
+  </div>
+
+  <!-- ===== Tab: 价格表 ===== -->
+  <div class="tab-panel" data-panel="prices">
+
+    <!-- ===== 上游价格自动同步（new-api） ===== -->
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-title">⚡ 上游价格自动同步（new-api）</div>
+      <p style="font-size:12px;color:var(--text-3);margin-bottom:12px;line-height:1.8">
+        你的上游都是 new-api 中转站，它的 <code>GET /api/pricing</code> 会返回每个模型的计费倍率，
+        网关据此换算出单价并定时同步，<strong>不用再手填价格</strong>。<br>
+        取价优先级：<strong>手工价格表 &gt; 自动同步价 &gt; 内置默认价</strong>——
+        想让某个模型走手填值，照旧在下面加一行即可，不用关这个开关。
+      </p>
+
+      <div style="display:flex;gap:18px;flex-wrap:wrap;align-items:flex-end;margin-bottom:14px">
+        <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer">
+          <input type="checkbox" name="auto_price_enabled" value="1"
+                 {% if settings.auto_price_enabled %}checked{% endif %}>
+          开启自动同步
+        </label>
+        <div>
+          <label style="font-size:12px;color:var(--text-2);font-weight:600;display:block;margin-bottom:5px">同步间隔（小时）</label>
+          <input type="number" name="auto_price_interval_hours" min="1" max="168"
+                 value="{{ settings.auto_price_interval_hours }}" style="width:110px">
+        </div>
+        <button type="button" class="btn btn-ghost btn-sm" onclick="syncAllPrices(this)">
+          🔄 立即同步所有上游价格
+        </button>
+        <span id="price-sync-status" style="font-size:11px;color:var(--text-3)"></span>
+      </div>
+
+      {% if auto_price.count or auto_price.upstreams %}
+      <div style="font-size:11px;color:var(--text-3);margin-bottom:6px">
+        上次同步：{{ auto_price.synced_at[:19]|replace("T", " ") if auto_price.synced_at else "—" }}
+        · 共 {{ auto_price.count }} 条自动价格
+      </div>
+      {% endif %}
+      <div style="display:flex;flex-direction:column;gap:4px">
+        {% for u in upstreams %}
+        {% set meta = auto_price.upstreams.get(u.name, {}) %}
+        <div style="font-size:11px;color:var(--text-2);display:flex;gap:8px;flex-wrap:wrap;align-items:baseline;padding:6px 0;border-top:1px solid var(--border)">
+          <code style="font-size:11px;min-width:80px">{{ u.name }}</code>
+          <span style="min-width:150px">
+            {% if meta.ok %}<span style="color:#2ea44f">✓ {{ meta.count }} 个模型</span>
+            {% elif meta.error %}<span style="color:#e07060">✗ 同步失败{% if meta.stale %}（沿用 {{ meta.count }} 条旧价）{% endif %}</span>
+            {% else %}<span style="color:var(--text-3)">尚未同步</span>{% endif %}
+          </span>
+          <span style="color:var(--text-3);min-width:120px">
+            {% if meta.group %}分组 {{ meta.group }} ×{{ meta.group_ratio }}{% endif %}
+          </span>
+          {% if meta.warning %}<span style="color:#d4a03a">⚠️ {{ meta.warning }}</span>{% endif %}
+          {% if meta.error %}<span style="color:#e07060">{{ meta.error[:120] }}</span>{% endif %}
+          <button type="button" class="btn btn-ghost btn-sm" style="font-size:11px;padding:3px 8px"
+                  onclick="syncOnePrice('{{ u.name }}', this)">同步此站</button>
+        </div>
+        {% endfor %}
+      </div>
+
+      <div id="pricing-group-box" style="margin-top:16px;padding-top:12px;border-top:1px solid var(--border)">
+        <div style="font-size:12px;color:var(--text-2);font-weight:600;margin-bottom:6px">各上游分组</div>
+        <p style="font-size:11px;color:var(--text-3);margin-bottom:10px;line-height:1.7">
+          自动价格 = 上游基础倍率 × <strong>分组倍率</strong>。价格接口只认后台凭据，
+          匿名调用拿不到"我们这把 key 属于哪个分组"，所以要在这里指定。
+          留空 = <code>default</code>。倍率不准会让<strong>全部</strong>自动价整体偏移，值得核对一次。
+        </p>
+        {% for u in upstreams %}
+        {% set meta = auto_price.upstreams.get(u.name, {}) %}
+        <div style="display:flex;gap:10px;align-items:center;margin-bottom:8px;flex-wrap:wrap">
+          <code style="font-size:11px;min-width:80px">{{ u.name }}</code>
+          <input list="groups-{{ u.name }}" id="pg-in-{{ u.name }}"
+                 value="{{ u.pricing_group or '' }}" placeholder="default" style="width:150px">
+          <datalist id="groups-{{ u.name }}">
+            {% for g, r in (meta.group_options or {}).items() %}
+            <option value="{{ g }}">{{ g }} ×{{ r }}</option>
+            {% endfor %}
+          </datalist>
+          <button type="button" class="btn btn-ghost btn-sm" style="font-size:11px;padding:3px 8px"
+                  onclick="savePricingGroup('{{ u.name }}', this)">保存并重算</button>
+          {% if meta.group_ratio %}
+          <span style="font-size:11px;color:var(--text-3)">当前生效：{{ meta.group or 'default' }} ×{{ meta.group_ratio }}</span>
+          {% endif %}
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-title">模型价格（中转站 × 模型，精确匹配）</div>
+      <p style="font-size:12px;color:var(--text-3);margin-bottom:12px">
+        每个中转站可能提供同款模型的不同别名（如 <code>[aws量]</code>、<code>[A-按量]</code>），价格也不同。
+        这里 <strong>(中转站, 模型)</strong> 是唯一定价单位。单位：美元/百万 token。
+        <strong>手工配置的条目永远优先于自动同步价。</strong>
+      </p>
+
+      <div style="margin-bottom:12px">
+        <button type="button" class="btn btn-ghost btn-sm" onclick="refreshAllModels(this)">
+          🔄 拉取所有上游的最新模型列表
+        </button>
+        <span id="refresh-status" style="font-size:11px;color:var(--text-3);margin-left:8px"></span>
+      </div>
+
+      <div class="filter-bar" data-filter="gateway-prices">
+        <select class="gw-filter-upstream">
+          <option value="">全部中转站</option>
+          {% for u in upstreams %}
+          <option value="{{ u.name }}">{{ u.name }}</option>
+          {% endfor %}
+        </select>
+        <input type="search" class="gw-filter-model" placeholder="搜索模型名…">
+        <span class="filter-count" id="gw-filter-count"></span>
+      </div>
+
+      <div id="price-list">
+        {% for mp in settings.model_prices %}
+        <div class="price-row" style="display:grid;grid-template-columns:1.2fr 1.8fr 0.8fr 0.8fr 0.8fr 0.8fr auto auto;gap:8px;align-items:center;margin-bottom:8px">
+          <select name="price_upstream[]" class="upstream-select" onchange="onUpstreamChange(this)">
+            <option value="">— 任意中转站 —</option>
+            {% for u in upstreams %}
+            <option value="{{ u.name }}" {% if (mp.upstream or '') == u.name %}selected{% endif %}>{{ u.name }}</option>
+            {% endfor %}
+          </select>
+          <input list="models-{{ (mp.upstream or '__any') }}" name="price_model[]" class="model-input"
+                 value="{{ mp.model or mp.name or '' }}"
+                 placeholder="模型名">
+          <input type="number" name="price_input[]" value="{{ mp.input }}" placeholder="输入" step="any" min="0">
+          <input type="number" name="price_output[]" value="{{ mp.output }}" placeholder="输出" step="any" min="0">
+          <input type="number" name="price_cw[]" value="{{ mp.cache_write }}" placeholder="缓存写" step="any" min="0">
+          <input type="number" name="price_cr[]" value="{{ mp.cache_read }}" placeholder="缓存读" step="any" min="0">
+          <input type="hidden" name="price_type[]" value="{{ mp.price_type or 'token' }}">
+          <input type="hidden" name="price_per_call[]" value="{{ mp.price_per_call or 0 }}">
+          <button type="button" class="btn btn-ghost btn-sm" style="font-size:11px;padding:4px 8px" onclick="autoFillPrices(this)" title="根据输入价格自动填充其他字段">⚡</button>
+          <button type="button" class="btn btn-danger btn-sm" onclick="this.closest('.price-row').remove()">✕</button>
+        </div>
+        {% endfor %}
+      </div>
+      <div style="font-size:11px;color:var(--text-3);margin:6px 0 10px;display:grid;grid-template-columns:1.2fr 1.8fr 0.8fr 0.8fr 0.8fr 0.8fr auto auto;gap:8px">
+        <span>中转站</span><span>模型</span><span>输入</span><span>输出</span><span>缓存写</span><span>缓存读</span><span></span><span></span>
+      </div>
+      <button type="button" class="btn btn-ghost btn-sm" onclick="addPriceRow()">+ 添加一行</button>
+
+      {% for u in upstreams %}
+      <datalist id="models-{{ u.name }}">
+        {% for m in u.cached_models %}
+        <option value="{{ m }}"></option>
+        {% endfor %}
+      </datalist>
+      {% endfor %}
+      <datalist id="models-__any">
+        {% for m in all_models %}
+        <option value="{{ m }}"></option>
+        {% endfor %}
+      </datalist>
+    </div>
+
+    <button type="submit" class="btn btn-primary">保存设置</button>
+  </div>
+
+  <!-- ===== Tab: 通知 & 余额 ===== -->
+  <div class="tab-panel" data-panel="notify">
+
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-title">PushPlus 微信推送</div>
+      <p style="font-size:12px;color:var(--text-3);margin-bottom:14px">
+        <a href="https://www.pushplus.plus" target="_blank" style="color:var(--accent)">pushplus.plus</a>
+        注册后获取 token，即可接收微信推送通知。免费、无需安装 App。
+      </p>
+      <div class="form-group">
+        <label class="form-label">PushPlus Token</label>
+        <input type="text" name="notify_pushplus_token"
+               value="{{ settings.notify_pushplus_token }}"
+               placeholder="从 pushplus.plus 获取，留空则不推送">
+      </div>
+      <div style="background:var(--bg-3);border:1px solid var(--border);border-radius:8px;padding:12px;font-size:12px;color:var(--text-2);line-height:1.8">
+        <strong>已开启的推送事件：</strong><br>
+        ✅ BP2 摘要开始生成<br>
+        ✅ BP2 摘要生成完成<br>
+        ✅ BP2 摘要失败（含 402 余额耗尽）<br>
+        🚫 上游限流 429<br>
+        💰 余额低于阈值告警
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-title">📱 ntfy Android 推送</div>
+      <p style="font-size:12px;color:var(--text-3);margin-bottom:14px">
+        国内可用的 Android 原生推送方案。安装
+        <a href="https://ntfy.sh" target="_blank" style="color:var(--accent)">ntfy App</a>
+        → 订阅一个私密频道 → 把订阅地址填在下面。
+        <a href="https://f-droid.org/packages/io.heckel.ntfy/" target="_blank" style="color:var(--accent)">F-Droid 下载</a>
+        或搜索 "ntfy"（Google Play 也有）。
+      </p>
+      <div class="form-group" style="margin-bottom:10px">
+        <label class="form-label">ntfy 推送地址</label>
+        <input type="text" name="notify_ntfy_url"
+               value="{{ settings.notify_ntfy_url }}"
+               placeholder="如 https://ntfy.sh/my-secret-topic-123">
+        <small style="font-size:11px;color:var(--text-3);margin-top:4px;display:block">
+          频道名建议用一串随机字符，避免被他人订阅。也可自建 ntfy 服务。
+        </small>
+      </div>
+      <div style="background:var(--bg-3);border:1px solid var(--border);border-radius:8px;padding:10px 12px;font-size:11px;color:var(--text-2);line-height:2">
+        <strong>使用步骤：</strong>
+        ① 手机安装 ntfy App →
+        ② 点击 + 按钮添加订阅，输入频道名（如 <code style="background:var(--bg);padding:1px 4px;border-radius:3px">my-secret-topic-123</code>）→
+        ③ 将完整 URL（如 <code style="background:var(--bg);padding:1px 4px;border-radius:3px">https://ntfy.sh/my-secret-topic-123</code>）填入上方 →
+        ④ 保存设置后点「发送测试通知」验证
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-title">余额监控</div>
+      <div class="form-grid">
+        <div class="form-group">
+          <label class="form-label">告警阈值（CNY/USD，低于此值推送）</label>
+          <input type="number" name="notify_balance_threshold"
+                 value="{{ settings.notify_balance_threshold }}"
+                 step="0.5" min="0" placeholder="5">
+          <small style="font-size:11px;color:var(--text-3);margin-top:4px;display:block">
+            默认 5，余额低于该值时微信推送告警
+          </small>
+        </div>
+        <div class="form-group">
+          <label class="form-label">检查间隔（小时）</label>
+          <input type="number" name="notify_balance_interval_hours"
+                 value="{{ settings.notify_balance_interval_hours }}"
+                 step="1" min="1" placeholder="6">
+          <small style="font-size:11px;color:var(--text-3);margin-top:4px;display:block">
+            默认每 6 小时检查一次
+          </small>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-title">测试推送</div>
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <button type="button" class="btn btn-ghost" onclick="testPush()">
+          📤 发送测试通知
+        </button>
+        <span id="test-push-result" style="font-size:13px;color:var(--text-2)"></span>
+      </div>
+    </div>
+
+    <button type="submit" class="btn btn-primary">保存设置</button>
+  </div>
+
+</form>
+
+<script>
+const UPSTREAM_NAMES = [
+  {% for u in upstreams %}"{{ u.name }}",{% endfor %}
+];
+
+function priceRowHtml() {
+  const upstreamOpts = '<option value="">— 任意中转站 —</option>' +
+    UPSTREAM_NAMES.map(n => `<option value="${n}">${n}</option>`).join('');
+  return `
+    <select name="price_upstream[]" class="upstream-select" onchange="onUpstreamChange(this)">
+      ${upstreamOpts}
+    </select>
+    <input list="models-__any" name="price_model[]" class="model-input" placeholder="模型名">
+    <input type="number" name="price_input[]" placeholder="输入" step="any" min="0">
+    <input type="number" name="price_output[]" placeholder="输出" step="any" min="0">
+    <input type="number" name="price_cw[]" placeholder="缓存写" step="any" min="0">
+    <input type="number" name="price_cr[]" placeholder="缓存读" step="any" min="0">
+    <input type="hidden" name="price_type[]" value="token">
+    <input type="hidden" name="price_per_call[]" value="0">
+    <button type="button" class="btn btn-danger btn-sm" onclick="this.closest('.price-row').remove()">✕</button>
+  `;
+}
+
+function addPriceRow() {
+  const row = document.createElement('div');
+  row.className = 'price-row';
+  row.style.cssText = 'display:grid;grid-template-columns:1.2fr 1.8fr 0.8fr 0.8fr 0.8fr 0.8fr auto;gap:8px;align-items:center;margin-bottom:8px';
+  row.innerHTML = priceRowHtml();
+  document.getElementById('price-list').appendChild(row);
+}
+
+function onUpstreamChange(select) {
+  const row = select.closest('.price-row');
+  const modelInput = row.querySelector('.model-input');
+  const ups = select.value;
+  modelInput.setAttribute('list', ups ? `models-${ups}` : 'models-__any');
+  if (modelInput.value && ups) {
+    const dl = document.getElementById(`models-${ups}`);
+    if (dl) {
+      const names = [...dl.querySelectorAll('option')].map(o => o.value);
+      if (!names.includes(modelInput.value)) modelInput.value = '';
+    }
+  }
+}
+
+async function refreshAllModels(btn) {
+  const status = document.getElementById('refresh-status');
+  btn.disabled = true;
+  status.textContent = '⏳ 拉取中...';
+  try {
+    const resp = await fetch('{{ admin_base }}/upstreams/refresh-all-models', {method: 'POST'});
+    const data = await resp.json();
+    const summary = Object.entries(data)
+      .map(([n, r]) => r.ok ? `✅ ${n}(${r.count})` : `❌ ${n}`)
+      .join(' · ');
+    status.textContent = summary + ' · 刷新页面看新数据';
+    status.style.color = '#2ea44f';
+  } catch (e) {
+    status.textContent = '❌ 拉取失败: ' + e.message;
+    status.style.color = '#e07060';
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+
+// 一键定价：根据输入价格自动填充输出、缓存写、缓存读
+function autoFillPrices(btn) {
+  const row = btn.closest('.price-row');
+  if (!row) return;
+  
+  const inputs = row.querySelectorAll('input[type="number"]');
+  if (inputs.length < 4) return;
+  
+  const inputPrice = parseFloat(inputs[0].value) || 0;
+  if (inputPrice <= 0) {
+    alert('请先填写输入价格');
+    return;
+  }
+  
+  // 常见倍率：输出 = 5x，缓存写 = 1.25x，缓存读 = 0.1x
+  inputs[1].value = (inputPrice * 5).toFixed(4);      // 输出
+  inputs[2].value = (inputPrice * 1.25).toFixed(4);   // 缓存写
+  inputs[3].value = (inputPrice * 0.1).toFixed(4);    // 缓存读
+  
+  // 高亮一下表示已填充
+  inputs[1].style.background = 'rgba(34,197,94,0.1)';
+  inputs[2].style.background = 'rgba(34,197,94,0.1)';
+  inputs[3].style.background = 'rgba(34,197,94,0.1)';
+  setTimeout(() => {
+    inputs[1].style.background = '';
+    inputs[2].style.background = '';
+    inputs[3].style.background = '';
+  }, 800);
+}
+
+</script>
+
+<script>
+function toggleModelPicker() {
+  const p = document.getElementById('model-picker');
+  p.style.display = p.style.display === 'none' ? 'block' : 'none';
+  if (p.style.display === 'block') document.getElementById('model-search').focus();
+}
+function selectModel(name) {
+  document.getElementById('summary_model').value = name;
+  document.getElementById('model-picker').style.display = 'none';
+}
+function filterModels(q) {
+  q = q.toLowerCase();
+  document.querySelectorAll('.model-opt').forEach(el => {
+    el.style.display = el.textContent.toLowerCase().includes(q) ? 'block' : 'none';
+  });
+}
+document.addEventListener('click', e => {
+  const picker = document.getElementById('model-picker');
+  if (picker && !picker.parentElement.contains(e.target))
+    picker.style.display = 'none';
+});
+
+
+// 一键定价：根据输入价格自动填充输出、缓存写、缓存读
+function autoFillPrices(btn) {
+  const row = btn.closest('.price-row');
+  if (!row) return;
+  
+  const inputs = row.querySelectorAll('input[type="number"]');
+  if (inputs.length < 4) return;
+  
+  const inputPrice = parseFloat(inputs[0].value) || 0;
+  if (inputPrice <= 0) {
+    alert('请先填写输入价格');
+    return;
+  }
+  
+  // 常见倍率：输出 = 5x，缓存写 = 1.25x，缓存读 = 0.1x
+  inputs[1].value = (inputPrice * 5).toFixed(4);      // 输出
+  inputs[2].value = (inputPrice * 1.25).toFixed(4);   // 缓存写
+  inputs[3].value = (inputPrice * 0.1).toFixed(4);    // 缓存读
+  
+  // 高亮一下表示已填充
+  inputs[1].style.background = 'rgba(34,197,94,0.1)';
+  inputs[2].style.background = 'rgba(34,197,94,0.1)';
+  inputs[3].style.background = 'rgba(34,197,94,0.1)';
+  setTimeout(() => {
+    inputs[1].style.background = '';
+    inputs[2].style.background = '';
+    inputs[3].style.background = '';
+  }, 800);
+}
+
+
+/* ===== 上游价格自动同步（new-api /api/pricing） ===== */
+function _priceSyncSummary(data) {
+  return Object.entries(data).map(([n, r]) => {
+    if (r && r.ok) return `✅ ${n}(${r.count})`;
+    return `❌ ${n}`;
+  }).join(' · ');
+}
+
+async function syncAllPrices(btn) {
+  const status = document.getElementById('price-sync-status');
+  btn.disabled = true;
+  status.textContent = '⏳ 同步中…';
+  status.style.color = 'var(--text-3)';
+  try {
+    const resp = await fetch('{{ admin_base }}/upstreams/refresh-all-prices', {method: 'POST'});
+    const data = await resp.json();
+    if (data.error) throw new Error(data.error);
+    status.textContent = _priceSyncSummary(data) + ' · 刷新页面看结果';
+    status.style.color = '#2ea44f';
+  } catch (e) {
+    status.textContent = '❌ 同步失败: ' + e.message;
+    status.style.color = '#e07060';
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function syncOnePrice(name, btn) {
+  const status = document.getElementById('price-sync-status');
+  btn.disabled = true;
+  status.textContent = `⏳ 同步 ${name}…`;
+  status.style.color = 'var(--text-3)';
+  try {
+    const resp = await fetch('{{ admin_base }}/upstreams/' + encodeURIComponent(name) + '/refresh-prices',
+                             {method: 'POST'});
+    const r = await resp.json();
+    if (r.error) throw new Error(r.error);
+    status.textContent = r.ok
+      ? `✅ ${name}：${r.count} 个模型 · 分组 ${r.group}×${r.group_ratio}` + (r.warning ? ` ⚠️ ${r.warning}` : '')
+      : `❌ ${name}：${r.error}`;
+    status.style.color = r.ok ? '#2ea44f' : '#e07060';
+    if (r.ok) setTimeout(() => location.reload(), 1200);
+  } catch (e) {
+    status.textContent = `❌ ${name}: ` + e.message;
+    status.style.color = '#e07060';
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+/* 保存分组后立刻重算该上游价格——group_ratio 变了，存量单价必须重算，
+   否则页面上显示的"当前生效倍率"和实际算钱用的单价会对不上。 */
+async function savePricingGroup(name, btn) {
+  const status = document.getElementById('price-sync-status');
+  const input = document.getElementById('pg-in-' + name);
+  const group = input ? input.value.trim() : '';
+  btn.disabled = true;
+  status.textContent = `⏳ 保存 ${name} 分组…`;
+  status.style.color = 'var(--text-3)';
+  try {
+    const body = new URLSearchParams({pricing_group: group});
+    const resp = await fetch('{{ admin_base }}/upstreams/' + encodeURIComponent(name) + '/pricing-group',
+                             {method: 'POST', body});
+    const r = await resp.json();
+    if (r.error) throw new Error(r.error);
+    status.textContent = `✅ ${name} 分组已保存，正在重算价格…`;
+    status.style.color = '#2ea44f';
+    const r2 = await (await fetch('{{ admin_base }}/upstreams/' + encodeURIComponent(name) + '/refresh-prices',
+                                  {method: 'POST'})).json();
+    if (r2.error || !r2.ok) throw new Error(r2.error || '重算失败');
+    status.textContent = `✅ ${name}：分组 ${r2.group}×${r2.group_ratio} · ${r2.count} 个模型`
+      + (r2.warning ? ` ⚠️ ${r2.warning}` : '');
+  } catch (e) {
+    status.textContent = '❌ ' + e.message;
+    status.style.color = '#e07060';
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+</script>
+
+<script>
+/* ===== 价格规则筛选 ===== */
+(function() {
+  document.addEventListener('DOMContentLoaded', function() {
+    var upSel = document.querySelector('.gw-filter-upstream');
+    var mInput = document.querySelector('.gw-filter-model');
+    var counter = document.getElementById('gw-filter-count');
+    if (!upSel || !mInput) return;
+    function apply() {
+      var up = upSel.value;
+      var kw = mInput.value.toLowerCase().trim();
+      var rows = document.querySelectorAll('#price-list .price-row');
+      var shown = 0;
+      rows.forEach(function(r) {
+        var upVal = (r.querySelector('.upstream-select') || {}).value || '';
+        var mVal = ((r.querySelector('.model-input') || {}).value || '').toLowerCase();
+        var ok = true;
+        if (up && upVal !== up) ok = false;
+        if (kw && mVal.indexOf(kw) === -1) ok = false;
+        r.style.display = ok ? '' : 'none';
+        if (ok) shown++;
+      });
+      if (counter) counter.textContent = shown + ' / ' + rows.length;
+    }
+    upSel.addEventListener('change', apply);
+    mInput.addEventListener('input', apply);
+    apply();
+  });
+})();
+
+
+// 一键定价：根据输入价格自动填充输出、缓存写、缓存读
+function autoFillPrices(btn) {
+  const row = btn.closest('.price-row');
+  if (!row) return;
+  
+  const inputs = row.querySelectorAll('input[type="number"]');
+  if (inputs.length < 4) return;
+  
+  const inputPrice = parseFloat(inputs[0].value) || 0;
+  if (inputPrice <= 0) {
+    alert('请先填写输入价格');
+    return;
+  }
+  
+  // 常见倍率：输出 = 5x，缓存写 = 1.25x，缓存读 = 0.1x
+  inputs[1].value = (inputPrice * 5).toFixed(4);      // 输出
+  inputs[2].value = (inputPrice * 1.25).toFixed(4);   // 缓存写
+  inputs[3].value = (inputPrice * 0.1).toFixed(4);    // 缓存读
+  
+  // 高亮一下表示已填充
+  inputs[1].style.background = 'rgba(34,197,94,0.1)';
+  inputs[2].style.background = 'rgba(34,197,94,0.1)';
+  inputs[3].style.background = 'rgba(34,197,94,0.1)';
+  setTimeout(() => {
+    inputs[1].style.background = '';
+    inputs[2].style.background = '';
+    inputs[3].style.background = '';
+  }, 800);
+}
+
+</script>
+
+
+<script>
+async function testPush() {
+  var result = document.getElementById('test-push-result');
+  result.style.color = 'var(--text-2)';
+  result.textContent = '⏳ 发送中…';
+  try {
+    var resp = await fetch('{{ admin_base }}/test-notify', { method: 'POST' });
+    var data = await resp.json();
+    if (data.ok) {
+      var channels = (data.channels || []).join(' + ') || '已发送';
+      result.style.color = 'var(--success)';
+      result.textContent = '✅ 发送成功：' + channels;
+    } else {
+      result.style.color = 'var(--danger)';
+      result.textContent = '❌ ' + (data.error || '发送失败');
+    }
+  } catch(e) {
+    result.style.color = 'var(--danger)';
+    result.textContent = '❌ 请求失败：' + e.message;
+  }
+}
+
+
+// 一键定价：根据输入价格自动填充输出、缓存写、缓存读
+function autoFillPrices(btn) {
+  const row = btn.closest('.price-row');
+  if (!row) return;
+  
+  const inputs = row.querySelectorAll('input[type="number"]');
+  if (inputs.length < 4) return;
+  
+  const inputPrice = parseFloat(inputs[0].value) || 0;
+  if (inputPrice <= 0) {
+    alert('请先填写输入价格');
+    return;
+  }
+  
+  // 常见倍率：输出 = 5x，缓存写 = 1.25x，缓存读 = 0.1x
+  inputs[1].value = (inputPrice * 5).toFixed(4);      // 输出
+  inputs[2].value = (inputPrice * 1.25).toFixed(4);   // 缓存写
+  inputs[3].value = (inputPrice * 0.1).toFixed(4);    // 缓存读
+  
+  // 高亮一下表示已填充
+  inputs[1].style.background = 'rgba(34,197,94,0.1)';
+  inputs[2].style.background = 'rgba(34,197,94,0.1)';
+  inputs[3].style.background = 'rgba(34,197,94,0.1)';
+  setTimeout(() => {
+    inputs[1].style.background = '';
+    inputs[2].style.background = '';
+    inputs[3].style.background = '';
+  }, 800);
+}
+
+</script>
+
+<!-- Tab 切换 JS -->
+<script>
+(function() {
+  const tabs = document.querySelectorAll('.tab-btn');
+  const panels = document.querySelectorAll('.tab-panel');
+  function activate(name) {
+    tabs.forEach(t => t.classList.toggle('active', t.dataset.tab === name));
+    panels.forEach(p => p.classList.toggle('active', p.dataset.panel === name));
+    localStorage.setItem('gateway-settings-tab', name);
+    if (location.hash.slice(1) !== name) {
+      history.replaceState(null, '', '#' + name);
+    }
+  }
+  tabs.forEach(t => t.addEventListener('click', () => activate(t.dataset.tab)));
+  const init = location.hash.slice(1) || localStorage.getItem('gateway-settings-tab') || 'bp2';
+  if (['bp2','memory','prices','notify'].includes(init)) activate(init);
+})();
+
+
+// 一键定价：根据输入价格自动填充输出、缓存写、缓存读
+function autoFillPrices(btn) {
+  const row = btn.closest('.price-row');
+  if (!row) return;
+  
+  const inputs = row.querySelectorAll('input[type="number"]');
+  if (inputs.length < 4) return;
+  
+  const inputPrice = parseFloat(inputs[0].value) || 0;
+  if (inputPrice <= 0) {
+    alert('请先填写输入价格');
+    return;
+  }
+  
+  // 常见倍率：输出 = 5x，缓存写 = 1.25x，缓存读 = 0.1x
+  inputs[1].value = (inputPrice * 5).toFixed(4);      // 输出
+  inputs[2].value = (inputPrice * 1.25).toFixed(4);   // 缓存写
+  inputs[3].value = (inputPrice * 0.1).toFixed(4);    // 缓存读
+  
+  // 高亮一下表示已填充
+  inputs[1].style.background = 'rgba(34,197,94,0.1)';
+  inputs[2].style.background = 'rgba(34,197,94,0.1)';
+  inputs[3].style.background = 'rgba(34,197,94,0.1)';
+  setTimeout(() => {
+    inputs[1].style.background = '';
+    inputs[2].style.background = '';
+    inputs[3].style.background = '';
+  }, 800);
+}
+
+</script>
+{% endblock %}
