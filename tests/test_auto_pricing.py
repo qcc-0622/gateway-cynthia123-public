@@ -203,6 +203,113 @@ def test_convert_model_rejects_nameless():
     assert price_sync.convert_model({"model_name": "  "}, 1.0, "1h") is None
 
 
+# ── 1.5 动态计费（billing_mode == "tiered_expr"）─────────────────────────
+# 2026-09-14 用户对照上游定价页抓出的真 bug：这类模型的 model_ratio 是过时遗留值，
+# 真实价格在 billing_expr 的系数里。小鸡 [Kiro3][手动标记] … 上游页面写 $1.875/$9.375，
+# 而按 model_ratio=37.5 换算成 $75/$375 —— 错 40 倍。
+
+_EXPR_SINGLE = ('tier("base", p * 1.875 + c * 9.375 + cr * 0.1875 '
+                '+ cc * 2.34375 + cc1h * 3.75)')
+_EXPR_TERNARY = ('len <= 272000 ?  tier("base", p * 5 + c * 30 + cr * 0.5 + cc * 6.25)'
+                 ': tier("tier2", p * 10 + c * 45 + cr * 1 + cc * 12.5)')
+_EXPR_NUM_FIRST = 'tier("base", 2 * p + 10 * c)'
+
+
+def test_parse_billing_expr_real_samples():
+    assert price_sync.parse_billing_expr(_EXPR_SINGLE) == {
+        "p": 1.875, "c": 9.375, "cr": 0.1875, "cc": 2.34375, "cc1h": 3.75,
+    }
+    # 多档表达式只取第一档（base）—— 站点定价页也是把 base 列在最前
+    assert price_sync.parse_billing_expr(_EXPR_TERNARY) == {
+        "p": 5.0, "c": 30.0, "cr": 0.5, "cc": 6.25,
+    }
+    # 系数写在左边也能认
+    assert price_sync.parse_billing_expr(_EXPR_NUM_FIRST) == {"p": 2.0, "c": 10.0}
+    # cc1h 不能被 cc 吃掉（变量名长优先）
+    assert "cc1h" in price_sync.parse_billing_expr(_EXPR_SINGLE)
+
+
+def test_parse_billing_expr_rejects_garbage():
+    for bad in ["", "乱七八糟", "model_ratio * 2", "tier("]:
+        assert price_sync.parse_billing_expr(bad) == {}, bad
+    # 档位名没加引号不影响取系数（解析器只关心系数，不解释档位语义）
+    assert price_sync.parse_billing_expr("tier(base, p * 1)") == {"p": 1.0}
+
+
+def test_convert_model_tiered_expr_matches_relay_pricing_page():
+    """换算结果必须与上游定价页逐项一致，且**绝不能**回落到 model_ratio。"""
+    item = {"model_name": "[Kiro3][手动标记] claude-opus-4-6-thinking [不补]",
+            "quota_type": 0, "model_ratio": 37.5, "completion_ratio": 5,
+            "billing_mode": "tiered_expr", "billing_expr": _EXPR_SINGLE}
+    e = price_sync.convert_model(item, group_ratio=1.0, cache_ttl="1h")
+    # 上游定价页（小鸡 站点）逐项：输入 1.875 / 输出 9.375 / 缓存读 0.1875
+    #                            缓存写 2.3438 / 缓存写(1h) 3.75
+    assert e["input"] == 1.875
+    assert e["output"] == 9.375
+    assert e["cache_read"] == 0.1875
+    assert e["cache_write_5m"] == 2.34375
+    assert e["cache_write_1h"] == 3.75
+    assert e["cache_write"] == 3.75           # cache_ttl=1h
+    assert e["billing"] == "tiered_expr"
+    # 回归锁：绝不能是 model_ratio 那条路算出来的 37.5 × 2 = $75
+    assert e["input"] != 75.0
+
+    # 5m / off 两档
+    assert price_sync.convert_model(item, 1.0, "5m")["cache_write"] == 2.34375
+    assert price_sync.convert_model(item, 1.0, "off")["cache_write"] == 0.0
+
+
+def test_tiered_expr_still_applies_group_ratio():
+    """表达式系数是**分组前**价格（new-api 计费时再乘 groupRatio），所以要乘分组倍率。
+    实测锚点：$1.875 × 0.8 = $1.5，正好等于用户手工表里那一行的值。"""
+    item = {"model_name": "X", "quota_type": 0, "model_ratio": 37.5,
+            "billing_mode": "tiered_expr", "billing_expr": _EXPR_SINGLE}
+    e = price_sync.convert_model(item, group_ratio=0.8, cache_ttl="1h")
+    assert abs(e["input"] - 1.5) < 1e-9
+    assert abs(e["output"] - 7.5) < 1e-9
+
+
+def test_convert_model_tiered_expr_unparseable_is_skipped_not_guessed():
+    """表达式解析不出来时**必须跳过**（返回 None）。若回落 model_ratio，
+    会给出错几十倍的价——这正是本次修掉的 bug。"""
+    item = {"model_name": "Y", "quota_type": 0, "model_ratio": 37.5,
+            "billing_mode": "tiered_expr", "billing_expr": "看不懂的表达式"}
+    assert price_sync.convert_model(item, 1.0, "1h") is None
+
+
+def test_convert_model_without_billing_mode_still_uses_ratio():
+    """普通模型（无 billing_mode）必须继续走倍率换算，别被这次改动误伤。"""
+    e = price_sync.convert_model(_sonnet(), 1.0, "1h")
+    assert e["input"] == 3.0 and e["output"] == 15.0
+    assert "billing" not in e
+
+
+def test_fixed_expr_is_per_call():
+    """`tier("base", fixed(N))` = 纯按次 N 美元/次。
+    依据：55 站图片模型的**名字里就写着价**（[图-次-0.06￥] → fixed(0.06)、
+    [图-次-0.26￥] → fixed(0.26)），用户手工表同一套命名也对得上。"""
+    assert price_sync.parse_fixed_price('tier("base", fixed(0.06))') == 0.06
+    assert price_sync.parse_fixed_price(_EXPR_SINGLE) is None       # 没有 fixed
+    assert price_sync.parse_fixed_price("") is None
+
+    item = {"model_name": "[图-次-0.06￥]gpt-image-2-med", "model_ratio": 37.5,
+            "billing_mode": "tiered_expr", "billing_expr": 'tier("base", fixed(0.06))'}
+    e = price_sync.convert_model(item, 1.0, "1h")
+    assert e["price_type"] == "per_call"
+    assert e["price_per_call"] == 0.06
+    assert e["input"] == 0.0 and e["billing"] == "tiered_expr"
+    # 分组倍率照样要乘
+    assert abs(price_sync.convert_model(item, 0.8, "1h")["price_per_call"] - 0.048) < 1e-9
+
+
+def test_fixed_yields_to_token_coefficients():
+    """表达式里同时有 token 系数和 fixed() 时，走 token（别把有量计价误判成按次）。"""
+    e = price_sync.convert_model(
+        {"model_name": "mix", "billing_mode": "tiered_expr",
+         "billing_expr": 'tier("base", p * 2 + fixed(0.06))'}, 1.0, "1h")
+    assert e["price_type"] == "token" and e["input"] == 2.0
+
+
 # ── 2. payload 解析与 URL ───────────────────────────────────────────────
 
 def test_parse_pricing_payload_ok():

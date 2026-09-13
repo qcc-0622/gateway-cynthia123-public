@@ -43,6 +43,7 @@
 """
 import asyncio
 import logging
+import re
 import ssl
 import time
 import traceback
@@ -90,6 +91,90 @@ def _ratio_or_default(item: dict, key: str, default: float) -> float:
     return default if value is None else float(value)
 
 
+# ── 动态计费表达式（billing_mode == "tiered_expr"）────────────────────────
+# new-api 的 billing_expr 是一段类 JS 表达式，**系数直接就是 $/1M 价格**，例如：
+#   tier("base", p * 1.875 + c * 9.375 + cr * 0.1875 + cc * 2.34375 + cc1h * 3.75)
+#   len <= 272000 ? tier("base", p * 5 + c * 30 + cr * 0.5 + cc * 6.25)
+#                 : tier("tier2", p * 10 + c * 45 + cr * 1 + cc * 12.5)
+# 变量含义：p=输入token c=输出token cr=缓存读 cc=缓存写(5m) cc1h=缓存写(1h)
+#          len=上下文长度（只影响选哪一档）
+# 我们**只取第一档（base）的线性系数**：绝大多数请求落在 base 档，站点自己的定价页
+# 也是把 base 列在最前。多档情况在 entry 里留 billing_expr 原文备查。
+#
+# 为什么不用完整 JS 解释器：为一个取价脚本引入 JS 求值器不值得，而且一旦求值出错
+# 会静默给出错价。这里只认 `变量 * 数字` 的线性项，认不出来就返回 {} → 调用方跳过
+# 该模型（不回落 model_ratio，见 convert_model 里的说明）。
+_EXPR_VAR_RE = re.compile(r"\b(cc1h|cc|cr|p|c)\s*\*\s*(-?\d+(?:\.\d+)?)")
+_EXPR_NUM_FIRST_RE = re.compile(r"(-?\d+(?:\.\d+)?)\s*\*\s*\b(cc1h|cc|cr|p|c)\b")
+_EXPR_FIXED_RE = re.compile(r"fixed\(\s*(-?\d+(?:\.\d+)?)\s*\)", re.I)
+_EXPR_FIRST_TIER_RE = re.compile(r"tier\(", re.I)
+
+
+def _first_tier_body(expr: str) -> str | None:
+    """取出第一个 tier(...) 的括号内容。括号配平扫，别用正则贪婪。
+
+    注意 `tier(` 自己的那个左括号已经算一层，所以 depth 从 1 起。"""
+    if not expr:
+        return None
+    m = _EXPR_FIRST_TIER_RE.search(expr)
+    if not m:
+        return None
+    depth, start = 1, m.end()
+    for j in range(m.end(), len(expr)):
+        ch = expr[j]
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth == 0:
+                return expr[start:j]
+    return None
+
+
+def parse_billing_expr(expr: str) -> dict[str, float]:
+    """从 billing_expr 里取出**第一档**的 $/1M 系数，返回 {"p":…, "c":…, …}。
+
+    只解析第一档（base）；解析失败返回 {}，让调用方跳过这个模型。
+    变量名按长的优先匹配（cc1h 不能被 cc 吃掉）。"""
+    body = _first_tier_body(expr)
+    if body is None:
+        return {}
+    out: dict[str, float] = {}
+    for var, num in _EXPR_VAR_RE.findall(body):
+        out.setdefault(var, _to_float(num))
+    for num, var in _EXPR_NUM_FIRST_RE.findall(body):
+        out.setdefault(var, _to_float(num))
+    return {k: v for k, v in out.items() if v is not None}
+
+
+def parse_fixed_price(expr: str) -> float | None:
+    """`tier("base", fixed(N))` → 每次 N（美元），纯按次计费。
+
+    依据（2026-09-14 实测，不是猜的）：55 站 4 个图片模型的**模型名里就写着价**，
+    与表达式一一对应 ——
+        [图-次-0.06￥]gpt-image-2-med      → fixed(0.06)
+        [图-次-0.09￥]gpt-image-2-max      → fixed(0.09)
+        [图-次-0.02￥]gpt-image-2.5        → fixed(0.02)
+        [图-次-0.26￥]gpt-image-2-med-124k → fixed(0.26)
+    且用户手工表里同一套命名的条目（`逆[kiro3-次-0.05￥]` = $0.05/次、
+    `逆[Ag1-次-0.25￥]` = $0.25/次）也逐一对上。所以 「次-N￥」的 N 就是每次的美元价。
+    """
+    body = _first_tier_body(expr)
+    if body is None:
+        return None
+    m = _EXPR_FIXED_RE.search(body)
+    if not m:
+        return None
+    return _to_float(m.group(1))
+
+
+def _to_float(s: str) -> float | None:
+    try:
+        return float(s)
+    except (TypeError, ValueError):
+        return None
+
+
 def convert_model(item: dict, group_ratio: float, cache_ttl: str) -> dict | None:
     """单个 Pricing 条目 → 我方价格条目（结构与 model_prices 一致）。
     返回 None 表示这条没法用（没模型名）。"""
@@ -111,6 +196,50 @@ def convert_model(item: dict, group_ratio: float, cache_ttl: str) -> dict | None
             "price_per_call": round(float(item.get("model_price") or 0) * group_ratio, 6),
             "input": 0.0, "output": 0.0, "cache_write": 0.0, "cache_read": 0.0,
             "cache_write_5m": 0.0, "cache_write_1h": 0.0,
+        })
+        return entry
+
+    # ── 动态计费（billing_expr）────────────────────────────────────────
+    # ⚠️ 这类模型**必须看 billing_expr，绝不能看 model_ratio**（2026-09-14 实测踩坑）：
+    # 站点标了「动态计费」时，billing_expr 的系数本身就是 $/1M 价格，而
+    # model_ratio 是过时的遗留值。反例：小鸡 [Kiro3][手动标记] … 上游定价页写明
+    # 输入 $1.875/输出 $9.375，但 model_ratio=37.5 → 按倍率换算成 $75/$375，**错 40 倍**。
+    # 解析不出来就**跳过这个模型**（宁可不给价，也绝不给一个错 40 倍的价）。
+    if (item.get("billing_mode") or "") == "tiered_expr":
+        expr = item.get("billing_expr") or ""
+        coeff = parse_billing_expr(expr)
+        if not coeff or "p" not in coeff:
+            # 没有 token 系数 → 可能是纯按次（fixed(N)）
+            fixed = parse_fixed_price(expr)
+            if fixed is not None:
+                entry.update({
+                    "price_type": "per_call",
+                    "price_per_call": round(fixed * group_ratio, 6),
+                    "input": 0.0, "output": 0.0,
+                    "cache_write": 0.0, "cache_read": 0.0,
+                    "cache_write_5m": 0.0, "cache_write_1h": 0.0,
+                    "billing": "tiered_expr",
+                    "billing_expr": expr[:300],
+                })
+                return entry
+            logger.warning(
+                "动态计费模型 %s 的 billing_expr 解析不出输入价，跳过（不用 model_ratio 兜底，"
+                "那会错几十倍）：%r", model, expr[:120])
+            return None
+        inp = coeff["p"] * group_ratio
+        cw_5m = coeff.get("cc", 0.0) * group_ratio
+        cw_1h = coeff.get("cc1h", 0.0) * group_ratio or cw_5m * CACHE_CREATION_1H_MULTIPLIER
+        entry.update({
+            "price_type": "token",
+            "price_per_call": 0.0,
+            "input": round(inp, 6),
+            "output": round(coeff.get("c", inp) * group_ratio, 6),
+            "cache_read": round(coeff.get("cr", 0.0) * group_ratio, 6),
+            "cache_write": round(cw_1h if cache_ttl == "1h" else (0.0 if cache_ttl == "off" else cw_5m), 6),
+            "cache_write_5m": round(cw_5m, 6),
+            "cache_write_1h": round(cw_1h, 6),
+            "billing": "tiered_expr",
+            "billing_expr": (item.get("billing_expr") or "")[:300],
         })
         return entry
 
