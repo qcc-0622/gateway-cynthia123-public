@@ -79,7 +79,7 @@ Chat Gateway 是一个部署在云服务器上的 **AI API 中转网关**，位�
      ┌──────────────┐    ┌──────────────┐
      │   上游 A      │    │   上游 B      │    ...
      │  Anthropic 格式│    │  OpenAI 格式  │
-     │  (Claude 官方) │    │ (relay-a.example.com 等)    │
+     │  (Claude 官方) │    │ (relay-a.test 等)    │
      └──────────────┘    └──────────────┘
 ```
 
@@ -366,7 +366,7 @@ AI: "FF 82% 说明载流子复合得到了有效抑制..."
    客户端=Anthropic, 上游=OpenAI → anthropic_to_openai(body)
 
 6. 转发
-   POST https://api.relay-a.example.com/v1/chat/completions (stream=true)
+   POST https://api.relay-a.test/v1/chat/completions (stream=true)
 
 7. 流式返回
    上游 SSE → openai_sse_to_anthropic_sse() → 客户端 SSE

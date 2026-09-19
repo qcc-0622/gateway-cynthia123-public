@@ -288,7 +288,7 @@ def _split_orphan_close_think(content: list[dict]) -> list[dict]:
     """
     Normalize thinking-tag layouts that arrive embedded in a text block.
 
-    relay-a.example.com Kiro thinking models do one of two things depending on the day:
+    relay-a.test Kiro thinking models do one of two things depending on the day:
       (1) swallow the open tag, leave only "[thinking]</think>\\n[answer]"
       (2) keep a full pair, "<thought>[thinking]</thought>\\n[answer]"
     Either way, a downstream client like RikkaHub renders it as polluted

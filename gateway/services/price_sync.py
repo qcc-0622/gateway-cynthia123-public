@@ -52,7 +52,7 @@ from datetime import datetime
 import httpx
 
 from gateway.costs import load_auto_prices, save_auto_prices
-from gateway.http_client import get_client
+from gateway.http_client import get_client, proxy_hint
 from gateway.settings import get
 from gateway.upstream import Upstream, _normalize_cache_ttl, load_upstreams
 
@@ -357,6 +357,7 @@ async def fetch_pricing(u: Upstream) -> tuple[str, dict]:
     坏凭据直接 403。失败会依次尝试：共享连接池 → 关掉证书校验（上游
     自签/链不全时；与 routers/admin.py fetch_models 同一套兜底理由）。"""
     errors: list[str] = []
+    codes: list[int] = []
     last_exc: Exception | None = None
 
     for url in pricing_urls(u.base_url):
@@ -368,10 +369,11 @@ async def fetch_pricing(u: Upstream) -> tuple[str, dict]:
             code = exc.response.status_code
             # 401/403 是"这一站换 URL 也没用"，必须当场给出精确定位——它们的原因
             # 完全不同、处置也不同，糊成一句"拉取失败"会把人带偏（2026-09-14 实测
-            # 本机 5 个上游里两种都真实出现：ksir 401 / relay-c 403，见下）。
+            # 本机 5 个上游里两种都真实出现：relay-k 401 / relay-c 403，见下）。
             if code in (401, 403):
                 raise RuntimeError(_reject_reason(url, code, exc.response)) from exc
             last_exc = exc
+            codes.append(code)
             errors.append(f"{url} → HTTP {code}")
             continue
         except Exception as exc:  # noqa: BLE001 — 网络层异常统一降级
@@ -385,17 +387,32 @@ async def fetch_pricing(u: Upstream) -> tuple[str, dict]:
                         resp.raise_for_status()
                         logger.info("fetch_pricing %s: OK via no_verify (%s)", u.name, url)
                         return url, resp.json()
+                except httpx.HTTPStatusError as exc2:
+                    last_exc = exc2
+                    codes.append(exc2.response.status_code)
+                    errors.append(f"{url} → HTTP {exc2.response.status_code}")
                 except Exception as exc2:  # noqa: BLE001
                     last_exc = exc2
                     errors.append(f"{url} → {type(exc2).__name__}: {exc2}")
             else:
                 errors.append(f"{url} → {type(exc).__name__}: {exc}")
-            continue
+
+    # 两个候选 URL 全部 404 = 这个站压根没有 /api/pricing 接口。
+    # 2026-09-19 实测 relay-d(relay-d.test)：/api/status、/api/pricing、/api/about
+    # 全是 Go 的 "404 page not found"，只有 /v1/* —— 它不是 new-api 系，
+    # 这辈子都拿不到价，只能手填。说清楚，别让下一个人反复重试。
+    if codes and all(c == 404 for c in codes):
+        raise RuntimeError(
+            f"该站没有 /api/pricing 接口（{len(codes)} 个候选路径全 404："
+            f"{'；'.join(errors)}）—— 它不是 new-api 系中转（可能只有 /v1/* 接口），"
+            f"没法自动取价，这一站请继续手填价格"
+        )
 
     detail = "；".join(errors) if errors else (
         f"{type(last_exc).__name__}: {last_exc}" if last_exc else "未知错误"
     )
-    raise RuntimeError(f"拉取价格表失败：{detail}")
+    hint = proxy_hint(u.base_url)
+    raise RuntimeError(f"拉取价格表失败：{detail}" + (f"。{hint}" if hint else ""))
 
 
 # ── 同步 ────────────────────────────────────────────────────────────────

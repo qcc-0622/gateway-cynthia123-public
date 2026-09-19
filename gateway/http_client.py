@@ -41,3 +41,55 @@ async def close_client() -> None:
         except Exception:
             pass
         _client = None
+
+
+# ── 代理白名单自检（2026-09-19）──────────────────────────────────────────
+# 背景：httpx 默认 trust_env=True，会读 HTTPS_PROXY 把外呼送进代理；.env 的策略是
+# "默认全走代理 + NO_PROXY 白名单放行"。于是**每新增一个上游都要记得补白名单**，
+# 忘了就会去连代理→代理连不通目标站→抛 httpx.ConnectError，而
+# `str(httpx.ConnectError)` 是**空字符串**、异常类型又长得像 TLS 问题，
+# traceback 只落在 httpcore/_async/http_proxy.py（这个文件名是唯一线索）。
+# 这个坑已经咬了三次（Issue #39 / #41 / 2026-09-19 relay-d），每次都耗掉几小时。
+# 所以这里把"是不是被代理吃了"变成一句能直接读的提示，挂到失败日志/错误信息里。
+_PROXY_ENV_KEYS = ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy",
+                   "ALL_PROXY", "all_proxy")
+
+
+def _no_proxy_covers(host: str, no_proxy: str | None = None) -> bool:
+    """host 是否被 NO_PROXY 白名单覆盖（httpx/urllib 的后缀匹配语义）。"""
+    if no_proxy is None:
+        import os
+        no_proxy = os.environ.get("NO_PROXY") or os.environ.get("no_proxy") or ""
+    host = (host or "").strip().lower().split(":")[0]
+    if not host:
+        return False
+    for raw in (no_proxy or "").split(","):
+        entry = raw.strip().lower()
+        if not entry:
+            continue
+        if entry == "*":
+            return True
+        entry = entry.split("://")[-1].split("/")[0].split(":")[0].lstrip(".")
+        if entry and (host == entry or host.endswith("." + entry)):
+            return True
+    return False
+
+
+def proxy_hint(url: str) -> str:
+    """若该请求很可能被代理拦截，返回一句提示；否则返回空串。
+
+    判定：配了代理（任一 *_PROXY 环境变量）+ 目标域名不在 NO_PROXY 白名单里。
+    这是"高度可疑"而不是"已证实"——所以措辞是"很可能"，且明确给出下一步动作。
+    """
+    import os
+    from urllib.parse import urlparse
+    proxy = next((os.environ.get(k) for k in _PROXY_ENV_KEYS if os.environ.get(k)), None)
+    if not proxy:
+        return ""
+    host = urlparse(url if "://" in url else "https://" + url).hostname or ""
+    if not host or _no_proxy_covers(host):
+        return ""
+    return (f"⚠️ 该域名 {host} 不在 .env 的 NO_PROXY/no_proxy 白名单里，"
+            f"而代理 {proxy} 已配置 → 请求很可能被 httpx trust_env 送进了代理"
+            f"（ConnectError 且 str 为空、traceback 落在 http_proxy.py 就是这个症状）。"
+            f"修法：把 {host} 补进 .env 的 NO_PROXY 和 no_proxy **两行**后 systemctl restart chat-gateway")

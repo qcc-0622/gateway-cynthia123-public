@@ -362,7 +362,7 @@ async def fetch_models(request: Request, name: str):
 
     # 2026-09-08: use shared client + detailed diagnostics (fixes SSL issue with relay-c)
     import traceback as _tb
-    from gateway.http_client import get_client
+    from gateway.http_client import get_client, proxy_hint
 
     async def _try_shared():
         client = get_client()
@@ -389,12 +389,20 @@ async def fetch_models(request: Request, name: str):
             logger.info("fetch_models %s: OK via %s", name, label)
             break
         except Exception as e:
+            # proxy_hint：三级 fallback 全失败最常见的原因不是证书，而是该域名
+            # 没进 .env 的 NO_PROXY 白名单 → httpx trust_env 把请求送进代理
+            # （ConnectError + str 为空 + traceback 落在 http_proxy.py 就是这个症状）
+            hint = proxy_hint(upstream.models_url)
             logger.warning(
-                "fetch_models %s: %s failed: %s(%s)\n%s",
-                name, label, type(e).__name__, e, _tb.format_exc()
+                "fetch_models %s: %s failed: %s(%s)%s\n%s",
+                name, label, type(e).__name__, e,
+                ("\n" + hint) if hint else "",
+                _tb.format_exc()
             )
     if data is None:
-        return JSONResponse({"error": f"All fetch attempts failed for {name}"})
+        hint = proxy_hint(upstream.models_url)
+        return JSONResponse({"error": f"All fetch attempts failed for {name}"
+                                      + (f"｜{hint}" if hint else "")})
 
     primary_models = sorted(_parse_models_payload(data) - {""})
     groups = [{

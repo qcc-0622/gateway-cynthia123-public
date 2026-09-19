@@ -24,6 +24,7 @@
 
 import asyncio
 import json
+import os
 import sys
 import tempfile
 from pathlib import Path
@@ -336,10 +337,10 @@ def test_parse_pricing_payload_rejects_bad_shapes():
 
 
 def test_pricing_urls_handles_v1_suffix():
-    assert price_sync.pricing_urls("https://a.com") == ["https://a.com/api/pricing"]
-    assert price_sync.pricing_urls("https://a.com/") == ["https://a.com/api/pricing"]
-    assert price_sync.pricing_urls("https://a.com/v1") == [
-        "https://a.com/v1/api/pricing", "https://a.com/api/pricing",
+    assert price_sync.pricing_urls("https://a.example.com") == ["https://a.example.com/api/pricing"]
+    assert price_sync.pricing_urls("https://a.example.com/") == ["https://a.example.com/api/pricing"]
+    assert price_sync.pricing_urls("https://a.example.com/v1") == [
+        "https://a.example.com/v1/api/pricing", "https://a.example.com/api/pricing",
     ]
 
 
@@ -421,6 +422,47 @@ def test_fetch_pricing_403_newapi_module_disabled():
         assert "403" in msg and "价格页模块" in msg, msg
         return
     raise AssertionError("403 应当抛出可读的 RuntimeError")
+
+
+def test_fetch_pricing_all_404_says_station_has_no_pricing_api():
+    """候选路径全 404 = 这个站压根没有 /api/pricing。
+    2026-09-19 实测 relay-d(relay-d.test)：/api/status、/api/pricing、/api/about
+    全是 Go 的 "404 page not found"，只有 /v1/* —— 不是 new-api 系，永远拿不到价。
+    必须说清楚，否则下一个人会反复重试一个不可能成功的站。"""
+    _install_fake_http({
+        "https://api.test/api/pricing": _FakeResp({}, status=404, text="404 page not found"),
+    })
+    try:
+        asyncio.run(price_sync.fetch_pricing(_make_upstream()))
+    except RuntimeError as e:
+        msg = str(e)
+        assert "没有 /api/pricing" in msg and "请继续手填" in msg, msg
+        return
+    raise AssertionError("全 404 应当抛出可读的 RuntimeError")
+
+
+def test_fetch_pricing_appends_proxy_hint_when_host_not_whitelisted():
+    """忘补 NO_PROXY 时（relay-d 那次），失败信息里必须带上"很可能走了代理"的提示，
+    否则 ConnectError 的 str 是空的、看起来像 TLS 问题，排查全靠猜。"""
+    _install_fake_http({"https://api.test/api/pricing": RuntimeError("boom")})
+    saved = {k: os.environ.get(k) for k in ("HTTPS_PROXY", "NO_PROXY", "no_proxy")}
+    try:
+        os.environ["HTTPS_PROXY"] = "http://127.0.0.1:7897"
+        os.environ.pop("NO_PROXY", None)
+        os.environ.pop("no_proxy", None)
+        try:
+            asyncio.run(price_sync.fetch_pricing(_make_upstream()))
+        except RuntimeError as e:
+            msg = str(e)
+            assert "NO_PROXY" in msg and "trust_env" in msg, msg
+        else:
+            raise AssertionError("应当抛出 RuntimeError")
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
 
 
 # ── 4. 取价优先级 ───────────────────────────────────────────────────────

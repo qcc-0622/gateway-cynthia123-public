@@ -14,7 +14,7 @@ import logging
 import time
 import traceback
 
-from gateway.http_client import get_client
+from gateway.http_client import get_client, proxy_hint
 from gateway.settings import get
 from gateway.upstream import (
     Upstream,
@@ -65,9 +65,15 @@ async def fetch_models_for_key(models_url: str, api_key: str, api_format: str) -
         resp.raise_for_status()
         return parse_models_payload(resp.json()) - {""}
     except Exception as e:
+        # proxy_hint：忘补 NO_PROXY 时 httpx 会静默走代理，报出来的是
+        # ConnectError(str 为空)、traceback 落在 http_proxy.py —— 光看日志
+        # 像是 TLS/证书问题，实际是白名单漏配（Issue #39/#41/2026-09-19 relay-d 三次）。
+        hint = proxy_hint(models_url)
         logger.warning(
-            "fetch_models_for_key FAILED: url=%s err=%s(%s)\n%s",
-            models_url, type(e).__name__, e, traceback.format_exc()
+            "fetch_models_for_key FAILED: url=%s err=%s(%s)%s\n%s",
+            models_url, type(e).__name__, e,
+            ("\n" + hint) if hint else "",
+            traceback.format_exc()
         )
         return set()
 
